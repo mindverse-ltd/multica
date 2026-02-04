@@ -162,6 +162,18 @@ async function fetchHistory(state: ConnectionStoreState): Promise<void> {
       hubId, "getAgentMessages", { agentId, limit: 200 },
     )
 
+    // Build a lookup map: toolCallId → { name, arguments } from assistant ToolCall blocks
+    const toolCallArgsMap = new Map<string, { name: string; args: Record<string, unknown> }>()
+    for (const m of result.messages) {
+      if (m.role === "assistant") {
+        for (const block of m.content) {
+          if (block.type === "toolCall") {
+            toolCallArgsMap.set(block.id, { name: block.name, args: block.arguments })
+          }
+        }
+      }
+    }
+
     // Mirror the backend message array directly
     const messages: Message[] = []
     for (const m of result.messages) {
@@ -181,6 +193,7 @@ async function fetchHistory(state: ConnectionStoreState): Promise<void> {
           stopReason: m.stopReason,
         })
       } else if (m.role === "toolResult") {
+        const callInfo = toolCallArgsMap.get(m.toolCallId)
         messages.push({
           id: uuidv7(),
           role: "toolResult",
@@ -188,6 +201,7 @@ async function fetchHistory(state: ConnectionStoreState): Promise<void> {
           agentId,
           toolCallId: m.toolCallId,
           toolName: m.toolName,
+          toolArgs: callInfo?.args,
           toolStatus: m.isError ? "error" : "success",
           isError: m.isError,
         })

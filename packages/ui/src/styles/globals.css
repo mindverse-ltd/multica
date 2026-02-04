@@ -86,6 +86,9 @@
   --scrollbar-thumb: oklch(0.82 0.003 286);
   --scrollbar-thumb-hover: oklch(0.705 0.015 286.067);
   --scrollbar-track: transparent;
+  --tool-running: oklch(0.6 0.18 250);
+  --tool-success: oklch(0.72 0.12 145);
+  --tool-error: oklch(0.65 0.2 25);
 }
 
 .dark {
@@ -123,6 +126,9 @@
   --scrollbar-thumb: oklch(1 0 0 / 15%);
   --scrollbar-thumb-hover: oklch(1 0 0 / 30%);
   --scrollbar-track: transparent;
+  --tool-running: oklch(0.65 0.2 250);
+  --tool-success: oklch(0.65 0.15 145);
+  --tool-error: oklch(0.7 0.2 22);
 }
 
 /* Shiki dual themes: CSS-only light/dark switching via CSS variables */
@@ -212,4 +218,10 @@
     animation: none;
     opacity: 0.7;
   }
+}
+
+/* Tool status: running glow pulse */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--tool-running); }
+  50% { box-shadow: 0 0 0 3px oklch(0.6 0.2 250 / 0); }
 }
