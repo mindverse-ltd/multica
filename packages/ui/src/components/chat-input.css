@@ -1,0 +1,18 @@
+.chat-input-editor .ProseMirror {
+  outline: none;
+  min-height: 2.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.chat-input-editor .ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  pointer-events: none;
+  height: 0;
+  color: var(--muted-foreground);
+}
+
+.chat-input-editor.is-disabled .ProseMirror {
+  cursor: not-allowed;
+}
