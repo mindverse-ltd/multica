@@ -30,6 +30,7 @@ import { evaluateCommandSafety, requiresApproval } from "../agent/tools/exec-saf
 import { addAllowlistEntry, recordAllowlistUse, matchAllowlist } from "../agent/tools/exec-allowlist.js";
 import type { ExecApprovalCallback, ExecApprovalConfig, ApprovalResult, ExecApprovalRequest } from "../agent/tools/exec-approval-types.js";
 import { readProfileConfig, writeProfileConfig } from "../agent/profile/storage.js";
+import { ChannelManager, initChannels } from "../channels/index.js";
 
 export class Hub {
   private readonly agents = new Map<string, AsyncAgent>();
@@ -43,6 +44,7 @@ export class Hub {
   readonly deviceStore: DeviceStore;
   private _onConfirmDevice: ((deviceId: string, agentId: string, meta?: DeviceMeta) => Promise<boolean>) | null = null;
   private _stateChangeListeners: ((state: ConnectionState) => void)[] = [];
+  readonly channelManager: ChannelManager;
   url: string;
   readonly path: string;
   readonly hubId: string;
@@ -103,6 +105,14 @@ export class Hub {
     this.client = this.createClient(this.url);
     this.client.connect();
     this.restoreAgents();
+
+    // Initialize channel plugin system
+    console.log("[Hub] Initializing channel system...");
+    initChannels();
+    this.channelManager = new ChannelManager(this);
+    void this.channelManager.startAll().then(() => {
+      console.log("[Hub] Channel system started");
+    });
   }
 
   /** Restore agents from persistent storage */
@@ -508,6 +518,9 @@ export class Hub {
   }
 
   shutdown(): void {
+    // Stop all channel connections
+    this.channelManager.stopAll();
+
     // Finalize subagent registry before closing agents
     shutdownSubagentRegistry();
 

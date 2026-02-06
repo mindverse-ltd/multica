@@ -30,7 +30,10 @@
   "license": "ISC",
   "packageManager": "pnpm@10.28.2",
   "pnpm": {
-    "onlyBuiltDependencies": ["electron", "esbuild"]
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@types/node": "catalog:",
@@ -58,6 +61,7 @@
     "@nestjs/websockets": "^11.1.12",
     "@sinclair/typebox": "^0.34.41",
     "fast-glob": "^3.3.3",
+    "grammy": "^1.39.3",
     "json5": "^2.2.3",
     "linkedom": "^0.18.12",
     "nestjs-pino": "^4.5.0",
