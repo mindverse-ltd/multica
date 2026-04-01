@@ -77,7 +77,6 @@ import { useRuntimeStore } from "@/features/runtimes";
 import { useIssueStore } from "@/features/issues";
 import { ActorAvatar } from "@/components/common/actor-avatar";
 import { useFileUpload } from "@/shared/hooks/use-file-upload";
-import { ActorAvatar } from "@/components/common/actor-avatar";
 
 
 // ---------------------------------------------------------------------------
