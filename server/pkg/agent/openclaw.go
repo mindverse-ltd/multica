@@ -96,12 +96,25 @@ func (b *openclawBackend) Execute(ctx context.Context, prompt string, opts ExecO
 
 		b.cfg.Logger.Info("openclaw finished", "pid", cmd.Process.Pid, "status", scanResult.status, "duration", duration.Round(time.Millisecond).String())
 
+		// Build usage map. OpenClaw doesn't report model per-step, so we
+		// attribute all usage to the configured model (or "unknown").
+		var usage map[string]TokenUsage
+		u := scanResult.usage
+		if u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
+			model := opts.Model
+			if model == "" {
+				model = "unknown"
+			}
+			usage = map[string]TokenUsage{model: u}
+		}
+
 		resCh <- Result{
 			Status:     scanResult.status,
 			Output:     scanResult.output,
 			Error:      scanResult.errMsg,
 			DurationMs: duration.Milliseconds(),
 			SessionID:  scanResult.sessionID,
+			Usage:      usage,
 		}
 	}()
 
@@ -116,6 +129,7 @@ type openclawEventResult struct {
 	errMsg    string
 	output    string
 	sessionID string
+	usage     TokenUsage
 }
 
 // processEvents reads NDJSON lines from r, dispatches events to ch, and returns
@@ -123,6 +137,7 @@ type openclawEventResult struct {
 func (b *openclawBackend) processEvents(r io.Reader, ch chan<- Message) openclawEventResult {
 	var output strings.Builder
 	var sessionID string
+	var usage TokenUsage
 	finalStatus := "completed"
 	var finalError string
 
@@ -160,7 +175,13 @@ func (b *openclawBackend) processEvents(r io.Reader, ch chan<- Message) openclaw
 		case "step_start":
 			trySend(ch, Message{Type: MessageStatus, Status: "running"})
 		case "step_end":
-			// Captures final session ID from step_end if present.
+			// Accumulate token usage from step_end events if present.
+			if event.Data != nil {
+				usage.InputTokens += openclawInt64(event.Data, "inputTokens")
+				usage.OutputTokens += openclawInt64(event.Data, "outputTokens")
+				usage.CacheReadTokens += openclawInt64(event.Data, "cacheReadTokens")
+				usage.CacheWriteTokens += openclawInt64(event.Data, "cacheWriteTokens")
+			}
 		case "result":
 			// The result event only updates status on explicit failure. A
 			// "completed" result is a no-op because finalStatus defaults to
@@ -193,6 +214,24 @@ func (b *openclawBackend) processEvents(r io.Reader, ch chan<- Message) openclaw
 		errMsg:    finalError,
 		output:    output.String(),
 		sessionID: sessionID,
+		usage:     usage,
+	}
+}
+
+// openclawInt64 safely extracts an int64 from a JSON-decoded map value (which
+// may be float64 due to Go's JSON number handling).
+func openclawInt64(data map[string]any, key string) int64 {
+	v, ok := data[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int64(n)
+	case int64:
+		return n
+	default:
+		return 0
 	}
 }
 

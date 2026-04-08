@@ -220,11 +220,25 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		finalOutput := output.String()
 		outputMu.Unlock()
 
+		// Build usage map from accumulated codex usage.
+		var usageMap map[string]TokenUsage
+		c.usageMu.Lock()
+		u := c.usage
+		c.usageMu.Unlock()
+		if u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
+			model := opts.Model
+			if model == "" {
+				model = "unknown"
+			}
+			usageMap = map[string]TokenUsage{model: u}
+		}
+
 		resCh <- Result{
 			Status:     finalStatus,
 			Output:     finalOutput,
 			Error:      finalError,
 			DurationMs: duration.Milliseconds(),
+			Usage:      usageMap,
 		}
 	}()
 
@@ -247,6 +261,9 @@ type codexClient struct {
 	notificationProtocol string // "unknown", "legacy", "raw"
 	turnStarted          bool
 	completedTurnIDs     map[string]bool
+
+	usageMu sync.Mutex
+	usage   TokenUsage // accumulated from turn events
 }
 
 type pendingRPC struct {
@@ -498,6 +515,8 @@ func (c *codexClient) handleEvent(msg map[string]any) {
 			})
 		}
 	case "task_complete":
+		// Extract usage from legacy task_complete if present.
+		c.extractUsageFromMap(msg)
 		if c.onTurnDone != nil {
 			c.onTurnDone(false)
 		}
@@ -533,6 +552,11 @@ func (c *codexClient) handleRawNotification(method string, params map[string]any
 				return
 			}
 			c.completedTurnIDs[turnID] = true
+		}
+
+		// Extract usage from turn/completed if present (e.g. params.turn.usage).
+		if turn, ok := params["turn"].(map[string]any); ok {
+			c.extractUsageFromMap(turn)
 		}
 
 		if c.onTurnDone != nil {
@@ -616,6 +640,48 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 			}
 		}
 	}
+}
+
+// extractUsageFromMap extracts token usage from a map that may contain
+// "usage", "token_usage", or "tokens" fields. Handles various Codex formats.
+func (c *codexClient) extractUsageFromMap(data map[string]any) {
+	// Try common field names for usage data.
+	var usageMap map[string]any
+	for _, key := range []string{"usage", "token_usage", "tokens"} {
+		if v, ok := data[key].(map[string]any); ok {
+			usageMap = v
+			break
+		}
+	}
+	if usageMap == nil {
+		return
+	}
+
+	c.usageMu.Lock()
+	defer c.usageMu.Unlock()
+
+	// Try various key conventions.
+	c.usage.InputTokens += codexInt64(usageMap, "input_tokens", "input", "prompt_tokens")
+	c.usage.OutputTokens += codexInt64(usageMap, "output_tokens", "output", "completion_tokens")
+	c.usage.CacheReadTokens += codexInt64(usageMap, "cache_read_tokens", "cache_read_input_tokens")
+	c.usage.CacheWriteTokens += codexInt64(usageMap, "cache_write_tokens", "cache_creation_input_tokens")
+}
+
+// codexInt64 returns the first non-zero int64 value from the map for the given keys.
+func codexInt64(m map[string]any, keys ...string) int64 {
+	for _, key := range keys {
+		switch v := m[key].(type) {
+		case float64:
+			if v != 0 {
+				return int64(v)
+			}
+		case int64:
+			if v != 0 {
+				return v
+			}
+		}
+	}
+	return 0
 }
 
 // ── Helpers ──

@@ -99,12 +99,25 @@ func (b *opencodeBackend) Execute(ctx context.Context, prompt string, opts ExecO
 
 		b.cfg.Logger.Info("opencode finished", "pid", cmd.Process.Pid, "status", scanResult.status, "duration", duration.Round(time.Millisecond).String())
 
+		// Build usage map. OpenCode doesn't report model per-step, so we
+		// attribute all usage to the configured model (or "unknown").
+		var usage map[string]TokenUsage
+		u := scanResult.usage
+		if u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
+			model := opts.Model
+			if model == "" {
+				model = "unknown"
+			}
+			usage = map[string]TokenUsage{model: u}
+		}
+
 		resCh <- Result{
 			Status:     scanResult.status,
 			Output:     scanResult.output,
 			Error:      scanResult.errMsg,
 			DurationMs: duration.Milliseconds(),
 			SessionID:  scanResult.sessionID,
+			Usage:      usage,
 		}
 	}()
 
@@ -119,6 +132,7 @@ type eventResult struct {
 	errMsg    string
 	output    string
 	sessionID string
+	usage     TokenUsage // accumulated token usage across all steps
 }
 
 // processEvents reads JSON lines from r, dispatches events to ch, and returns
@@ -126,6 +140,7 @@ type eventResult struct {
 func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventResult {
 	var output strings.Builder
 	var sessionID string
+	var usage TokenUsage
 	finalStatus := "completed"
 	var finalError string
 
@@ -157,7 +172,15 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 		case "step_start":
 			trySend(ch, Message{Type: MessageStatus, Status: "running"})
 		case "step_finish":
-			// Captures final session ID from step_finish if present.
+			// Accumulate token usage from step_finish events.
+			if t := event.Part.Tokens; t != nil {
+				usage.InputTokens += t.Input
+				usage.OutputTokens += t.Output
+				if t.Cache != nil {
+					usage.CacheReadTokens += t.Cache.Read
+					usage.CacheWriteTokens += t.Cache.Write
+				}
+			}
 		}
 	}
 
@@ -175,6 +198,7 @@ func (b *opencodeBackend) processEvents(r io.Reader, ch chan<- Message) eventRes
 		errMsg:    finalError,
 		output:    output.String(),
 		sessionID: sessionID,
+		usage:     usage,
 	}
 }
 
@@ -281,6 +305,21 @@ type opencodeEventPart struct {
 	Tool   string             `json:"tool,omitempty"`
 	CallID string             `json:"callID,omitempty"`
 	State  *opencodeToolState `json:"state,omitempty"`
+
+	// step_finish token usage
+	Tokens *opencodeTokens `json:"tokens,omitempty"`
+}
+
+// opencodeTokens represents token usage in a step_finish event.
+type opencodeTokens struct {
+	Input  int64              `json:"input"`
+	Output int64              `json:"output"`
+	Cache  *opencodeCacheTokens `json:"cache,omitempty"`
+}
+
+type opencodeCacheTokens struct {
+	Read  int64 `json:"read"`
+	Write int64 `json:"write"`
 }
 
 // opencodeToolState represents the state of a tool invocation.

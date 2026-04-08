@@ -341,21 +341,10 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 
 // CompleteTask marks a running task as completed.
 type TaskCompleteRequest struct {
-	PRURL     string             `json:"pr_url"`
-	Output    string             `json:"output"`
-	SessionID string             `json:"session_id"` // Claude session ID for future resumption
-	WorkDir   string             `json:"work_dir"`   // working directory used during execution
-	Usage     []TaskUsagePayload `json:"usage,omitempty"`
-}
-
-// TaskUsagePayload is the per-model token usage reported by the daemon.
-type TaskUsagePayload struct {
-	Provider         string `json:"provider"`
-	Model            string `json:"model"`
-	InputTokens      int64  `json:"input_tokens"`
-	OutputTokens     int64  `json:"output_tokens"`
-	CacheReadTokens  int64  `json:"cache_read_tokens"`
-	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	PRURL     string `json:"pr_url"`
+	Output    string `json:"output"`
+	SessionID string `json:"session_id"` // Claude session ID for future resumption
+	WorkDir   string `json:"work_dir"`   // working directory used during execution
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
@@ -375,7 +364,32 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store per-task token usage (best-effort, don't fail the request).
+	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
+	writeJSON(w, http.StatusOK, taskToResponse(*task))
+}
+
+// ReportTaskUsage stores per-task token usage. Called independently of
+// complete/fail so usage is captured even when tasks fail or are blocked.
+type TaskUsagePayload struct {
+	Provider         string `json:"provider"`
+	Model            string `json:"model"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+}
+
+func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "taskId")
+
+	var req struct {
+		Usage []TaskUsagePayload `json:"usage"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
 	for _, u := range req.Usage {
 		if err := h.Queries.UpsertTaskUsage(r.Context(), db.UpsertTaskUsageParams{
 			TaskID:           parseUUID(taskID),
@@ -390,8 +404,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
-	writeJSON(w, http.StatusOK, taskToResponse(*task))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // GetTaskStatus returns the current status of a task.
