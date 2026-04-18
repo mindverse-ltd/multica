@@ -273,6 +273,15 @@ func (h *Handler) resolveFeishuUser(r *http.Request, profile feishuUserInfoRespo
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
+			identity, identityErr := h.Queries.GetExternalIdentityByProvider(r.Context(), db.GetExternalIdentityByProviderParams{
+				Provider:       feishuProvider,
+				ProviderUserID: strings.TrimSpace(profile.Data.OpenID),
+			})
+			if identityErr == nil {
+				if existingUser, userErr := h.Queries.GetUser(r.Context(), identity.UserID); userErr == nil {
+					return h.refreshExternalProfile(r, existingUser, strings.TrimSpace(profile.Data.Name), strings.TrimSpace(profile.Data.AvatarURL))
+				}
+			}
 			if existing, existingErr := h.Queries.GetUserByEmail(r.Context(), email); existingErr == nil {
 				return db.User{}, accountConflictError(existing.Email)
 			}
