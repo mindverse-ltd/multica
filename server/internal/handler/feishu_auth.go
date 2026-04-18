@@ -258,16 +258,29 @@ func (h *Handler) resolveFeishuUser(r *http.Request, profile feishuUserInfoRespo
 		}
 	}
 
-	user, err := h.Queries.CreateUser(r.Context(), db.CreateUserParams{
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		return db.User{}, err
+	}
+	defer tx.Rollback(r.Context())
+
+	qtx := h.Queries.WithTx(tx)
+
+	user, err := qtx.CreateUser(r.Context(), db.CreateUserParams{
 		Name:      name,
 		Email:     email,
 		AvatarUrl: strToText(strings.TrimSpace(profile.Data.AvatarURL)),
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			if existing, existingErr := h.Queries.GetUserByEmail(r.Context(), email); existingErr == nil {
+				return db.User{}, accountConflictError(existing.Email)
+			}
+		}
 		return db.User{}, err
 	}
 
-	_, err = h.Queries.CreateExternalIdentity(r.Context(), db.CreateExternalIdentityParams{
+	_, err = qtx.CreateExternalIdentity(r.Context(), db.CreateExternalIdentityParams{
 		UserID:         user.ID,
 		Provider:       feishuProvider,
 		ProviderUserID: strings.TrimSpace(profile.Data.OpenID),
@@ -279,6 +292,21 @@ func (h *Handler) resolveFeishuUser(r *http.Request, profile feishuUserInfoRespo
 		RawProfile:     rawProfile,
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			identity, identityErr := h.Queries.GetExternalIdentityByProvider(r.Context(), db.GetExternalIdentityByProviderParams{
+				Provider:       feishuProvider,
+				ProviderUserID: strings.TrimSpace(profile.Data.OpenID),
+			})
+			if identityErr == nil {
+				if existingUser, userErr := h.Queries.GetUser(r.Context(), identity.UserID); userErr == nil {
+					return h.refreshExternalProfile(r, existingUser, strings.TrimSpace(profile.Data.Name), strings.TrimSpace(profile.Data.AvatarURL))
+				}
+			}
+		}
+		return db.User{}, err
+	}
+
+	if err := tx.Commit(r.Context()); err != nil {
 		return db.User{}, err
 	}
 
