@@ -4,8 +4,8 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
-import { useWorkspaceStore } from "@multica/core/workspace";
 import { workspaceKeys } from "@multica/core/workspace/queries";
+import { paths } from "@multica/core/paths";
 import { api } from "@multica/core/api";
 import {
   Card,
@@ -23,7 +23,6 @@ function CallbackContent() {
   const qc = useQueryClient();
   const loginWithGoogle = useAuthStore((s) => s.loginWithGoogle);
   const loginWithFeishu = useAuthStore((s) => s.loginWithFeishu);
-  const hydrateWorkspace = useWorkspaceStore((s) => s.hydrateWorkspace);
   const [error, setError] = useState("");
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
 
@@ -46,16 +45,17 @@ function CallbackContent() {
     const provider = providerPart?.slice(9) || "google";
     const isDesktop = stateParts.includes("platform:desktop");
     const nextPart = stateParts.find((p) => p.startsWith("next:"));
-    const nextUrl = nextPart ? nextPart.slice(5) : null; // strip "next:" prefix
+    const nextUrl = nextPart ? nextPart.slice(5) : null;
 
     const redirectUri = `${window.location.origin}/auth/callback`;
-    const completeWebLogin = provider === "feishu" ? loginWithFeishu : loginWithGoogle;
-    const exchangeDesktopToken = provider === "feishu"
-      ? api.feishuLogin.bind(api)
-      : api.googleLogin.bind(api);
+    const completeWebLogin =
+      provider === "feishu" ? loginWithFeishu : loginWithGoogle;
+    const exchangeDesktopToken =
+      provider === "feishu"
+        ? api.feishuLogin.bind(api)
+        : api.googleLogin.bind(api);
 
     if (isDesktop) {
-      // Desktop flow: exchange code for token, then redirect via deep link
       exchangeDesktopToken(code, redirectUri)
         .then(({ token }) => {
           setDesktopToken(token);
@@ -64,23 +64,27 @@ function CallbackContent() {
         .catch((err) => {
           setError(err instanceof Error ? err.message : "Login failed");
         });
-    } else {
-      // Normal web flow
-      completeWebLogin(code, redirectUri)
-        .then(async () => {
-          const wsList = await api.listWorkspaces();
-          qc.setQueryData(workspaceKeys.list(), wsList);
-          const lastWsId = localStorage.getItem("multica_workspace_id");
-          const ws = await hydrateWorkspace(wsList, lastWsId);
-          // Honor the ?next= redirect if present (e.g. /invite/{id})
-          const defaultDest = ws ? "/issues" : "/onboarding";
-          router.push(nextUrl || defaultDest);
-        })
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : "Login failed");
-        });
+      return;
     }
-  }, [searchParams, loginWithFeishu, loginWithGoogle, hydrateWorkspace, router, qc]);
+
+    completeWebLogin(code, redirectUri)
+      .then(async () => {
+        const wsList = await api.listWorkspaces();
+        qc.setQueryData(workspaceKeys.list(), wsList);
+        // URL is now the source of truth for the current workspace — the
+        // [workspaceSlug]/layout syncs stores + cookie once we navigate.
+        // Honor ?next= first (e.g. came from /invite/{id}), otherwise land
+        // in the first workspace's issues, or /workspaces/new for zero-workspace users.
+        const [first] = wsList;
+        const defaultDest = first
+          ? paths.workspace(first.slug).issues()
+          : paths.newWorkspace();
+        router.push(nextUrl || defaultDest);
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Login failed");
+      });
+  }, [searchParams, loginWithFeishu, loginWithGoogle, router, qc]);
 
   if (desktopToken) {
     return (
@@ -117,7 +121,10 @@ function CallbackContent() {
             <CardDescription>{error}</CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
-            <a href="/login" className="text-primary underline-offset-4 hover:underline">
+            <a
+              href={paths.login()}
+              className="text-primary underline-offset-4 hover:underline"
+            >
               Back to login
             </a>
           </CardContent>

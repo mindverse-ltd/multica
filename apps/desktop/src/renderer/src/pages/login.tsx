@@ -1,11 +1,9 @@
 import { LoginPage } from "@multica/views/auth";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 
-const WEB_URL = import.meta.env.VITE_WEB_URL || "http://localhost:3000";
+const WEB_URL = import.meta.env.VITE_APP_URL || "http://localhost:3000";
 
 export function DesktopLoginPage() {
-  const lastWorkspaceId = localStorage.getItem("multica_workspace_id");
-
   const handleGoogleLogin = () => {
     // Open the hosted login page in the default browser. The callback page
     // will redirect back via multica:// deep link with the token.
@@ -29,9 +27,9 @@ export function DesktopLoginPage() {
       />
       <LoginPage
         logo={<MulticaIcon bordered size="lg" />}
-        lastWorkspaceId={lastWorkspaceId}
         onSuccess={() => {
-          // Auth store update triggers AppContent re-render → shows DesktopShell
+          // Auth store update triggers AppContent re-render → shows DesktopShell.
+          // Initial workspace navigation happens in routes.tsx via IndexRedirect.
         }}
         onGoogleLogin={handleGoogleLogin}
         onFeishuLogin={handleFeishuLogin}

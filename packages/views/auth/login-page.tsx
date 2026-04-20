@@ -19,7 +19,6 @@ import {
   InputOTPSlot,
 } from "@multica/ui/components/ui/input-otp";
 import { useAuthStore } from "@multica/core/auth";
-import { useWorkspaceStore } from "@multica/core/workspace";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { api } from "@multica/core/api";
 import type { User } from "@multica/core/types";
@@ -45,7 +44,8 @@ interface CliCallbackConfig {
 interface LoginPageProps {
   /** Logo element rendered above the title */
   logo?: ReactNode;
-  /** Called after successful login + workspace hydration */
+  /** Called after successful login. The workspace list is seeded into React
+   *  Query before this fires, so the caller can compute a destination URL. */
   onSuccess: () => void;
   /** Google OAuth config. Omit to disable Google login. */
   google?: OAuthConfig;
@@ -53,8 +53,6 @@ interface LoginPageProps {
   feishu?: OAuthConfig;
   /** CLI callback config for authorizing CLI tools. */
   cliCallback?: CliCallbackConfig;
-  /** Preferred workspace ID to restore after login. */
-  lastWorkspaceId?: string | null;
   /** Called after a token is obtained (e.g. to set cookies). */
   onTokenObtained?: () => void;
   /** Override Google login handler (e.g. desktop opens browser externally). When provided, renders the Google button even if `google` config is omitted. */
@@ -105,7 +103,6 @@ export function LoginPage({
   google,
   feishu,
   cliCallback,
-  lastWorkspaceId,
   onTokenObtained,
   onGoogleLogin,
   onFeishuLogin,
@@ -210,11 +207,13 @@ export function LoginPage({
           return;
         }
 
-        // Normal path
+        // Normal path: seed the workspace list into the Query cache so the
+        // caller's onSuccess can read it synchronously to compute a destination
+        // URL (first workspace's slug, or /workspaces/new for zero-workspace
+        // users).
         await useAuthStore.getState().verifyCode(email, value);
         const wsList = await api.listWorkspaces();
         qc.setQueryData(workspaceKeys.list(), wsList);
-        useWorkspaceStore.getState().hydrateWorkspace(wsList, lastWorkspaceId);
         onTokenObtained?.();
         onSuccess();
       } catch (err) {
@@ -225,7 +224,7 @@ export function LoginPage({
         setLoading(false);
       }
     },
-    [email, onSuccess, cliCallback, lastWorkspaceId, onTokenObtained, qc],
+    [email, onSuccess, cliCallback, onTokenObtained, qc],
   );
 
   const handleResend = async () => {

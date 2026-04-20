@@ -75,6 +75,16 @@ if is_local; then
     until pg_isready -h 127.0.0.1 -p "$db_port" -U "$POSTGRES_USER" -d postgres > /dev/null 2>&1; do
       sleep 1
     done
+
+    echo "==> Ensuring database '$POSTGRES_DB' exists on host cluster..."
+    db_exists="$(psql -h 127.0.0.1 -p "$db_port" -U "$POSTGRES_USER" -d postgres -Atqc "SELECT 1 FROM pg_database WHERE datname = '$POSTGRES_DB'")"
+
+    if [ "$db_exists" != "1" ]; then
+      psql -h 127.0.0.1 -p "$db_port" -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 \
+        -c "CREATE DATABASE \"$POSTGRES_DB\"" \
+        > /dev/null
+    fi
+
     echo "✓ PostgreSQL ready (host cluster). Database: $POSTGRES_DB"
   else
     # ---------- Local fallback: use Docker ----------

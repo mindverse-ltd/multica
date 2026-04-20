@@ -444,7 +444,7 @@ func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, 
 
 func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 
 	q := r.URL.Query().Get("q")
 	if q == "" {
@@ -556,7 +556,7 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 	wsUUID := parseUUID(workspaceID)
 
 	// Parse optional filter params
@@ -728,7 +728,7 @@ func (h *Handler) ListChildIssues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ChildIssueProgress(w http.ResponseWriter, r *http.Request) {
-	wsID := resolveWorkspaceID(r)
+	wsID := h.resolveWorkspaceID(r)
 	wsUUID := parseUUID(wsID)
 
 	rows, err := h.Queries.ChildIssueProgress(r.Context(), wsUUID)
@@ -780,7 +780,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 
 	// Get creator from context (set by auth middleware)
 	creatorID, ok := requireUserID(w, r)
@@ -917,7 +917,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
 	h.publish(protocol.EventIssueCreated, workspaceID, creatorType, actualCreatorID, map[string]any{"issue": resp})
 
-	// Only ready issues in todo are enqueued for agents.
+	// Enqueue agent task when an agent-assigned issue is created.
 	if issue.AssigneeType.Valid && issue.AssigneeID.Valid {
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
 			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
@@ -1112,12 +1112,21 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		"creator_id":          uuidToString(prevIssue.CreatorID),
 	})
 
-	// Reconcile task queue when assignee changes (not on status changes —
-	// agents manage issue status themselves via the CLI).
+	// Reconcile task queue when assignee changes.
 	if assigneeChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
+			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+		}
+	}
+
+	// Trigger the assigned agent when a member moves an issue out of backlog.
+	// Backlog acts as a parking lot — moving to an active status signals the
+	// issue is ready for work.
+	if statusChanged && !assigneeChanged && actorType == "member" &&
+		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" {
+		if h.isAgentAssigneeReady(r.Context(), issue) {
 			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 		}
 	}
@@ -1163,23 +1172,23 @@ func (h *Handler) canAssignAgent(ctx context.Context, r *http.Request, agentID, 
 	return false, "cannot assign to private agent"
 }
 
-// shouldEnqueueAgentTask returns true when an issue assignment should trigger
-// the assigned agent. No status gate — assignment is an explicit human action,
-// so it should trigger regardless of issue status (e.g. assigning an agent to
-// a done issue to fix a discovered problem).
-// All trigger types (on_assign, on_comment, on_mention) are always enabled.
+// shouldEnqueueAgentTask returns true when an issue creation or assignment
+// should trigger the assigned agent. Backlog issues are skipped — backlog
+// acts as a parking lot where issues can be pre-assigned without immediately
+// triggering execution. Moving out of backlog is handled separately in
+// UpdateIssue.
 func (h *Handler) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bool {
+	if issue.Status == "backlog" {
+		return false
+	}
 	return h.isAgentAssigneeReady(ctx, issue)
 }
 
 // shouldEnqueueOnComment returns true if a member comment on this issue should
-// trigger the assigned agent. Fires for any non-terminal status — comments are
-// conversational and can happen at any stage of active work.
+// trigger the assigned agent. Fires for any status — comments are
+// conversational and can happen at any stage, including after completion
+// (e.g. follow-up questions on a done issue).
 func (h *Handler) shouldEnqueueOnComment(ctx context.Context, issue db.Issue) bool {
-	// Don't trigger on terminal statuses (done, cancelled).
-	if issue.Status == "done" || issue.Status == "cancelled" {
-		return false
-	}
 	if !h.isAgentAssigneeReady(ctx, issue) {
 		return false
 	}
@@ -1279,7 +1288,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(raw, &rawUpdates)
 	}
 
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 	updated := 0
 	for _, issueID := range req.IssueIDs {
 		prevIssue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
@@ -1420,6 +1429,14 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Trigger agent when moving out of backlog (batch).
+		if statusChanged && !assigneeChanged && actorType == "member" &&
+			prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" {
+			if h.isAgentAssigneeReady(r.Context(), issue) {
+				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
+			}
+		}
+
 		// Cancel active tasks when the issue is cancelled by a user.
 		if statusChanged && issue.Status == "cancelled" {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
@@ -1453,7 +1470,7 @@ func (h *Handler) BatchDeleteIssues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workspaceID := resolveWorkspaceID(r)
+	workspaceID := h.resolveWorkspaceID(r)
 	deleted := 0
 	for _, issueID := range req.IssueIDs {
 		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{

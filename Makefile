@@ -133,6 +133,8 @@ start:
 	@echo "Backend: http://localhost:$(PORT)"
 	@echo "Frontend: http://localhost:$(FRONTEND_PORT)"
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
+	@echo "Running migrations..."
+	cd server && go run ./cmd/migrate up
 	@echo "Starting backend and frontend..."
 	@trap 'kill 0' EXIT; \
 		(cd server && go run ./cmd/server) & \
@@ -209,7 +211,7 @@ server:
 	cd server && go run ./cmd/server
 
 daemon:
-	@$(MAKE) multica MULTICA_ARGS="daemon"
+	@$(MAKE) multica MULTICA_ARGS="daemon restart --profile local"
 
 cli:
 	@$(MAKE) multica MULTICA_ARGS="$(MULTICA_ARGS)"
