@@ -45,11 +45,12 @@ describe("OnboardingWizard", () => {
   });
 
   it("starts at workspace creation when no workspace exists", () => {
-    render(<OnboardingWizard onComplete={vi.fn()} />);
+    const { container } = render(<OnboardingWizard onComplete={vi.fn()} />);
 
     expect(
       screen.getByRole("button", { name: "Finish workspace" }),
     ).toBeInTheDocument();
+    expect(container.firstChild).toHaveClass("h-svh", "overflow-y-auto");
   });
 
   it("continues setup when a workspace already exists", () => {

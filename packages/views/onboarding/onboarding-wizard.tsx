@@ -41,9 +41,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   );
 
   return (
-    <div className="flex min-h-svh flex-col bg-background">
+    <div className="flex h-svh flex-col overflow-y-auto bg-background">
       {/* Progress bar */}
-      <div className="flex items-center justify-center gap-2 px-6 pt-8">
+      <div className="sticky top-0 z-10 flex items-center justify-center gap-2 bg-background/95 px-6 pt-8 pb-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         {STEPS.map((s, i) => (
           <div key={s.label} className="flex items-center gap-2">
             <div className="flex items-center gap-1.5">
@@ -90,7 +90,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       </div>
 
       {/* Step content */}
-      <div className="flex flex-1 items-center justify-center px-6 py-12">
+      <div className="flex flex-1 items-start justify-center px-6 py-8 md:items-center md:py-12">
         {step === 0 && <StepWorkspace onNext={startWorkspaceSetup} />}
         {step === 1 && wsId && (
           <StepRuntime wsId={wsId} onNext={next} />
