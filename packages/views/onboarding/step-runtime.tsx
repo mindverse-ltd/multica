@@ -25,33 +25,101 @@ function isCloudEnvironment(): boolean {
   return window.location.hostname.endsWith(CLOUD_HOST);
 }
 
-function buildSetupCommand(): string {
-  if (isCloudEnvironment()) return "multica setup";
-
+function getSelfHostTargets(): { serverUrl: string; appUrl: string } {
   const appUrl = typeof window !== "undefined" ? window.location.origin : "";
   const apiBaseUrl = api.getBaseUrl?.() ?? "";
   const serverUrl = apiBaseUrl || appUrl;
+  return { serverUrl, appUrl: appUrl || serverUrl };
+}
+
+function buildSetupSteps(): Array<{ label: string; cmd: string }> {
+  if (isCloudEnvironment()) {
+    return [
+      INSTALL_STEP,
+      {
+        label: "Configure, authenticate, and start the daemon",
+        cmd: "multica setup",
+      },
+    ];
+  }
+
+  const { serverUrl, appUrl } = getSelfHostTargets();
 
   if (!serverUrl || serverUrl === "http://localhost:8080") {
-    // Default self-host — no flags needed
-    return "multica setup self-host";
+    return [
+      INSTALL_STEP,
+      {
+        label: "Configure, authenticate, and start the daemon",
+        cmd: "multica setup self-host",
+      },
+    ];
   }
 
-  const parts = ["multica setup self-host"];
-  parts.push(`--server-url ${serverUrl}`);
-  if (appUrl && appUrl !== serverUrl) {
-    parts.push(`--app-url ${appUrl}`);
+  return [
+    INSTALL_STEP,
+    {
+      label: "Configure the backend URL",
+      cmd: `multica config set server_url ${serverUrl}`,
+    },
+    {
+      label: "Configure the web app URL",
+      cmd: `multica config set app_url ${appUrl}`,
+    },
+    {
+      label: "Authenticate in your browser",
+      cmd: "multica login",
+    },
+    {
+      label: "Start the daemon",
+      cmd: "multica daemon start",
+    },
+  ];
+}
+
+async function copyText(text: string): Promise<void> {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
   }
-  return parts.join(" ");
+
+  if (typeof document === "undefined") {
+    throw new Error("Clipboard API unavailable");
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.top = "0";
+  textarea.style.left = "-9999px";
+  textarea.style.opacity = "0";
+
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, textarea.value.length);
+
+  try {
+    const copied = document.execCommand("copy");
+    if (!copied) {
+      throw new Error("execCommand(copy) returned false");
+    }
+  } finally {
+    textarea.remove();
+  }
 }
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await copyText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (error) {
+      console.error("Failed to copy setup command:", error);
+    }
   };
 
   return (
@@ -78,13 +146,7 @@ export function StepRuntime({
 }) {
   const qc = useQueryClient();
 
-  const setupSteps = useMemo(
-    () => [
-      INSTALL_STEP,
-      { label: "Set up and start the daemon", cmd: buildSetupCommand() },
-    ],
-    [],
-  );
+  const setupSteps = useMemo(() => buildSetupSteps(), []);
 
   const { data: runtimes = [] } = useQuery(runtimeListOptions(wsId));
 
@@ -103,9 +165,9 @@ export function StepRuntime({
           Connect a Runtime
         </h1>
         <p className="mt-2 text-muted-foreground">
-          Install the CLI and run the setup command below to connect your
-          machine. The daemon auto-detects agent CLIs (Claude Code, Codex,
-          etc.) on your PATH.
+          Install the CLI and run the commands below to connect your machine.
+          The daemon auto-detects agent CLIs (Claude Code, Codex, etc.) on
+          your PATH.
         </p>
       </div>
 
@@ -127,8 +189,12 @@ export function StepRuntime({
             </div>
           ))}
           <p className="pt-1 text-xs text-muted-foreground">
-            The setup command handles authentication, configuration, and daemon
-            startup — all in one step.
+            Public self-host deployments behind a reverse proxy are more reliable
+            with explicit config + login + daemon commands than a single
+            <code className="mx-1 rounded bg-background px-1 py-0.5 font-mono">
+              multica setup self-host
+            </code>
+            step.
           </p>
         </CardContent>
       </Card>
