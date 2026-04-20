@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -80,10 +82,10 @@ func printConfigLocation(profile string) {
 func confirmOverwrite(profile string) (bool, error) {
 	cfg, err := cli.LoadCLIConfigForProfile(profile)
 	if err != nil {
-		return true, nil // can't load → treat as no config
+		return true, nil // can't load -> treat as no config
 	}
 	if cfg.ServerURL == "" {
-		return true, nil // no server configured → fresh config
+		return true, nil // no server configured -> fresh config
 	}
 
 	fmt.Fprintln(os.Stderr, "Current configuration:")
@@ -160,13 +162,7 @@ func runSetupSelfHost(cmd *cobra.Command, args []string) error {
 	port, _ := cmd.Flags().GetInt("port")
 	frontendPort, _ := cmd.Flags().GetInt("frontend-port")
 
-	// If custom URLs provided, use them; otherwise default to localhost with ports.
-	if serverURL == "" {
-		serverURL = fmt.Sprintf("http://localhost:%d", port)
-	}
-	if appURL == "" {
-		appURL = fmt.Sprintf("http://localhost:%d", frontendPort)
-	}
+	serverURL, appURL = resolveSelfHostURLs(serverURL, appURL, port, frontendPort)
 
 	cfg := cli.CLIConfig{
 		ServerURL: serverURL,
@@ -203,21 +199,78 @@ func runSetupSelfHost(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func resolveSelfHostURLs(serverURL, appURL string, port, frontendPort int) (string, string) {
+	serverURL = strings.TrimSpace(serverURL)
+	appURL = strings.TrimSpace(appURL)
+
+	if serverURL == "" {
+		serverURL = fmt.Sprintf("http://localhost:%d", port)
+	}
+	if appURL != "" {
+		return serverURL, appURL
+	}
+
+	if inferred := inferAppURLFromServerURL(serverURL); inferred != "" {
+		return serverURL, inferred
+	}
+
+	return serverURL, fmt.Sprintf("http://localhost:%d", frontendPort)
+}
+
+func inferAppURLFromServerURL(serverURL string) string {
+	normalized := normalizeAPIBaseURL(serverURL)
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+
+	host := parsed.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return ""
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return ""
+	}
+
+	parsed.Path = ""
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return strings.TrimRight(parsed.String(), "/")
+}
+
 // probeServer checks whether a Multica backend is reachable at the given URL.
 func probeServer(baseURL string) bool {
-	url := strings.TrimRight(baseURL, "/") + "/health"
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
+	client := &http.Client{Timeout: 2 * time.Second}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false
+	for _, probe := range []struct {
+		path        string
+		statusCodes []int
+	}{
+		{path: "/health", statusCodes: []int{http.StatusOK}},
+		{path: "/api/me", statusCodes: []int{http.StatusOK, http.StatusUnauthorized, http.StatusForbidden}},
+	} {
+		url := strings.TrimRight(baseURL, "/") + probe.path
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			cancel()
+			continue
+		}
+
+		resp, err := client.Do(req)
+		cancel()
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+
+		for _, code := range probe.statusCodes {
+			if resp.StatusCode == code {
+				return true
+			}
+		}
 	}
 
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	return false
 }

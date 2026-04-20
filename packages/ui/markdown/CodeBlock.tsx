@@ -4,6 +4,7 @@ import { Copy, Check } from "lucide-react"
 import { Button } from "@multica/ui/components/ui/button"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip"
 import { cn } from '@multica/ui/lib/utils'
+import { copyTextToClipboard } from '@multica/ui/lib/clipboard'
 
 export interface CodeBlockProps {
   code: string
@@ -129,7 +130,7 @@ export function CodeBlock({
 
   const handleCopy = React.useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(code)
+      await copyTextToClipboard(code)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (err) {
