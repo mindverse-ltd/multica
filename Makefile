@@ -1,4 +1,4 @@
-.PHONY: dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down selfhost selfhost-stop selfhost-native-backend selfhost-native-frontend selfhost-native-check selfhost-native-stop selfhost-feishu-preflight selfhost-feishu-configure
+.PHONY: dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down selfhost selfhost-stop selfhost-native-backend selfhost-native-frontend selfhost-native-bootstrap selfhost-native-check selfhost-native-stop selfhost-feishu-preflight selfhost-feishu-configure
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -91,6 +91,10 @@ selfhost-native-backend:
 selfhost-native-frontend:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-native-frontend.sh "$(ENV_FILE)"
+
+selfhost-native-bootstrap:
+	$(REQUIRE_ENV)
+	@bash scripts/selfhost-native-bootstrap.sh
 
 selfhost-native-check:
 	$(REQUIRE_ENV)

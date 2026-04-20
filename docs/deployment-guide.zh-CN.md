@@ -360,29 +360,79 @@ make selfhost-feishu-preflight
 
 ### 11.1 当前状态
 
-当前机器没有新增可用公网端口，也不能直接走 `80` / `443`，因此**只能先以内网回环 + SSH 隧道方式验证**。
+当前服务器已经新增了一条 **Multica 专用的 Nginx 公网入口**：
 
-### 11.2 后续正式暴露公网的推荐方案
+- 公网入口：`http://115.190.235.210:14000`
+- Nginx 配置文件：`/etc/nginx/conf.d/multica-14000.conf`
+- 反向代理规则：
+  - `/` -> `127.0.0.1:13030`
+  - `/api/` -> `127.0.0.1:13080/api/`
+  - `/auth/` -> `127.0.0.1:13080/auth/`
+  - `/uploads/` -> `127.0.0.1:13080/uploads/`
+  - `/ws` -> `127.0.0.1:13080/ws`
 
-推荐新增两个可访问入口之一：
+当前机器上已有业务占用 `13789`（OpenClaw / Macaron Hub），因此 Multica **不要复用**该端口。
 
-方案 A：单独开放一个新端口给前端，另一个端口给后端
+### 11.2 当前公网方案的适用范围
 
-- `app` -> `127.0.0.1:13030`
-- `api` -> `127.0.0.1:13080`
+这次落地的是 **临时 HTTP 公网方案**，主要用于：
 
-方案 B：新增一个可访问的 HTTPS 入口，通过 Nginx/Caddy 分流
+- 让 Web 端不再依赖 SSH 隧道访问
+- 验证单端口反代是否工作正常
+- 为后续 HTTPS 与正式飞书回调改造铺路
 
-- `/` -> `127.0.0.1:13030`
-- `/ws` 和 `/api` -> `127.0.0.1:13080`
+已同步到远端 `.env` 的关键值：
 
-### 11.3 在真正开放端口前需要确认的事项
+```env
+FRONTEND_ORIGIN=http://115.190.235.210:14000
+MULTICA_APP_URL=http://115.190.235.210:14000
+LOCAL_UPLOAD_BASE_URL=http://115.190.235.210:14000/uploads
+ALLOWED_ORIGINS=http://115.190.235.210:14000,http://127.0.0.1:13030
+REMOTE_API_URL=http://127.0.0.1:13080
+NEXT_PUBLIC_API_URL=
+NEXT_PUBLIC_WS_URL=
+FEISHU_REDIRECT_URI=http://115.190.235.210:14000/auth/callback
+```
 
-- 是否有固定域名
-- 是否允许新增公网端口
-- 是否要复用现有 Nginx
-- 是否需要 TLS 证书
-- 是否需要企业内网访问限制
+其中：
+
+- `NEXT_PUBLIC_API_URL` 留空，表示浏览器走同源 `/api` 与 `/auth`
+- `NEXT_PUBLIC_WS_URL` 留空，表示前端按页面 origin 自动推导 `/ws`
+- Web 前端已经按上述公网设置重新 build 并重新发布到远端
+
+### 11.3 还需要手工完成的网络项
+
+虽然服务器上的 Nginx 已监听 `14000`，但从本地直接访问：
+
+```bash
+curl -I http://115.190.235.210:14000/login
+```
+
+仍然超时，说明 **火山云安全组或上层网络策略还没有放行 `14000/TCP`**。
+
+因此还需要在云侧补做：
+
+- 安全组入站放行：`TCP 14000`
+- 如有额外网络 ACL / 防火墙策略，也要同步放行 `14000`
+
+只要云侧放行完成，当前 Nginx 配置即可直接对公网提供访问。
+
+### 11.4 后续升级为正式 HTTPS 的推荐方案
+
+如果后续要正式接飞书公网回调，建议从当前 `14000` 临时方案升级为：
+
+- 使用稳定域名
+- 配置可信 TLS 证书
+- 将入口切换到 HTTPS（可以继续保留高位端口，也可以后续迁移到标准入口）
+
+升级后需要同步更新：
+
+- `FRONTEND_ORIGIN`
+- `MULTICA_APP_URL`
+- `LOCAL_UPLOAD_BASE_URL`
+- `ALLOWED_ORIGINS`
+- `FEISHU_REDIRECT_URI`
+- 前端 `.next` 构建产物
 
 ## 12. 已知坑位
 
@@ -445,10 +495,12 @@ kill <old_backend_pid> <old_frontend_pid>
 
 ## 13. 正式切换公网前的待办清单
 
-- [ ] 确认可用公网端口或域名
-- [ ] 配置 Nginx/Caddy 反向代理
-- [ ] 配置 TLS 证书
-- [ ] 将 `.env` 中的 `FRONTEND_ORIGIN`、`MULTICA_APP_URL`、`NEXT_PUBLIC_API_URL`、`NEXT_PUBLIC_WS_URL` 切换为正式地址
+- [x] 确认可用公网端口：`14000`
+- [x] 配置 Nginx 反向代理：`/etc/nginx/conf.d/multica-14000.conf`
+- [ ] 在火山云安全组放行 `14000/TCP`
+- [ ] 配置 TLS 证书（当前仍是临时 HTTP 方案）
+- [x] 将 `.env` 中的 `FRONTEND_ORIGIN`、`MULTICA_APP_URL`、`NEXT_PUBLIC_API_URL`、`NEXT_PUBLIC_WS_URL` 切换为公网方案
+- [ ] 根据正式 HTTPS 地址再次调整 `FEISHU_REDIRECT_URI`
 - [ ] 接入正式邮件服务或企业鉴权
 - [ ] 关闭开发验证码依赖
 - [ ] 补充守护进程配置与日志轮转
