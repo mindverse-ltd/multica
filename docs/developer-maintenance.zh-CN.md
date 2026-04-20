@@ -9,15 +9,17 @@
 
 ## 1. 仓库关系建议
 
-推荐保持以下 Git 远程约定：
+当前项目建议明确区分 3 个 Git remote，避免把公司交付分支误推到社区仓库：
 
-- `origin`：公司 fork
-- `upstream`：开源主仓库 `multica-ai/multica`
+- `origin`：个人 fork，用于个人备份、中转和临时验证
+- `company`：公司 fork `mindverse-ltd/multica`，用于正式协作与 PR
+- `upstream`：开源主仓库 `multica-ai/multica`，仅用于同步社区更新
 
 配置示例：
 
 ```bash
-git remote set-url origin git@github.com:mindverse-ltd/multica.git
+git remote set-url origin git@github.com:<your-user>/multica.git
+git remote add company git@github.com:mindverse-ltd/multica.git
 git remote add upstream git@github.com:multica-ai/multica.git
 ```
 
@@ -30,9 +32,17 @@ git remote -v
 预期：
 
 ```text
-origin   git@github.com:mindverse-ltd/multica.git
+origin   git@github.com:<your-user>/multica.git
+company  git@github.com:mindverse-ltd/multica.git
 upstream git@github.com:multica-ai/multica.git
 ```
+
+### 1.1 当前推荐推送策略
+
+- 日常开发分支先推 `origin`
+- 需要团队协作、验收、合并时，再推 `company`
+- **不要默认把公司定制分支推到 `upstream`**
+- 只有确认是通用能力、且已从公司私有上下文中抽离后，才考虑单独整理社区 PR
 
 ## 2. 分支策略建议
 
@@ -89,6 +99,13 @@ git merge --ff-only upstream/main
 git merge upstream/main
 ```
 
+同步完成后建议先推到个人 fork 观察，再推到公司 fork：
+
+```bash
+git push origin main
+git push company main
+```
+
 ### 3.5 解决冲突
 
 重点检查以下目录：
@@ -118,7 +135,7 @@ cd server && go test ./...
 ### 3.7 推送到公司 fork
 
 ```bash
-git push origin main
+git push company main
 ```
 
 ## 4. 日常开发新功能流程
@@ -148,16 +165,20 @@ cd server && go test ./...
 
 ### 4.4 推送功能分支
 
+建议先推个人 fork，再推公司 fork：
+
 ```bash
 git push -u origin feat/your-feature-name
+git push -u company feat/your-feature-name
 ```
 
 ### 4.5 发起 PR
 
 PR 目标仓库：
 
-- 开发阶段：提到 `mindverse-ltd/multica:main`
-- 如果是可回馈开源社区的通用能力，再单独整理成上游 PR
+- 公司交付与验收：提到 `mindverse-ltd/multica:main`
+- 如果是可回馈开源社区的通用能力，再新开一个独立分支，单独整理成上游 PR
+- **不要直接拿公司交付分支向 `upstream` 发 PR**
 
 ## 5. 公司 fork 与上游的边界建议
 
@@ -180,6 +201,7 @@ PR 目标仓库：
 - 公司内网地址、SSO 域名、租户配置
 - 企业内部通知、审计、权限约束
 - 与公司内部平台的特定集成
+- 面向当前服务器环境的临时公网入口与运维脚本
 
 ## 6. 推荐的冲突控制方式
 
@@ -232,15 +254,57 @@ PR 目标仓库：
 - 旧用户仍可正常登录
 ```
 
-## 8. 推荐的同步节奏
+## 8. 当前服务器运维注意事项
+
+当前测试/交付服务器：
+
+- SSH：`root@115.190.235.210:51365`
+- 公网入口：`http://115.190.235.210:14000`
+- 代码目录：`/opt/multica`
+
+### 8.1 当前运行方式
+
+当前服务器不是标准 systemd 启动环境，Multica 采用“宿主机 PostgreSQL + 原生 backend/frontend + Nginx 反代”的方式运行：
+
+- PostgreSQL：本机 `127.0.0.1:5432`
+- Backend：本机 `127.0.0.1:13080`
+- Frontend：本机 `127.0.0.1:13030`
+- Nginx 公网入口：`0.0.0.0:14000`
+
+### 8.2 重启后恢复机制
+
+服务器重启后，宿主机 PostgreSQL 不会自动恢复到 Multica 所需状态，因此已经补了：
+
+- 启动脚本：`scripts/selfhost-native-bootstrap.sh`
+- 远端定时项：`@reboot /opt/multica/scripts/selfhost-native-bootstrap.sh >> /opt/multica/logs/bootstrap.log 2>&1`
+
+如果重启后再次出现 `502 Bad Gateway`，优先检查：
+
+```bash
+pg_lsclusters
+curl -I http://127.0.0.1:13080/health
+curl -I http://127.0.0.1:13030/login
+curl -I http://127.0.0.1:14000/login
+```
+
+### 8.3 飞书回调路由注意事项
+
+公网入口下，飞书回调页必须走前端页面，而不是后端 API。当前 Nginx 必须满足：
+
+- `location = /auth/callback` -> `127.0.0.1:13030/auth/callback`
+- `location /auth/` -> `127.0.0.1:13080/auth/`
+
+如果把 `/auth/callback` 一并转发到后端，会出现飞书授权后回跳 `404 page not found`。
+
+## 9. 推荐的同步节奏
 
 - 上游活跃阶段：每周同步 1 次
 - 鉴权改造进行中：每次大改前先同步一次
 - 上线前：做一次完整同步 + 回归测试
 
-## 9. 故障排查建议
+## 10. 故障排查建议
 
-### 9.1 同步后登录坏了
+### 10.1 同步后登录坏了
 
 优先检查：
 
@@ -250,7 +314,7 @@ PR 目标仓库：
 - `packages/views/auth/login-page.tsx`
 - `packages/core/api/client.ts`
 
-### 9.2 同步后前端编译失败
+### 10.2 同步后前端编译失败
 
 优先检查：
 
