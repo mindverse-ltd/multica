@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -36,6 +37,7 @@ type AgentResponse struct {
 	Visibility         string            `json:"visibility"`
 	Status             string            `json:"status"`
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
+	Model              string            `json:"model"`
 	OwnerID            *string           `json:"owner_id"`
 	Skills             []SkillResponse   `json:"skills"`
 	CreatedAt          string            `json:"created_at"`
@@ -94,6 +96,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		Visibility:         a.Visibility,
 		Status:             a.Status,
 		MaxConcurrentTasks: a.MaxConcurrentTasks,
+		Model:              a.Model.String,
 		OwnerID:            uuidToPtr(a.OwnerID),
 		Skills:             []SkillResponse{},
 		CreatedAt:          timestampToString(a.CreatedAt),
@@ -111,27 +114,39 @@ type RepoData struct {
 }
 
 type AgentTaskResponse struct {
-	ID                    string         `json:"id"`
-	AgentID               string         `json:"agent_id"`
-	RuntimeID             string         `json:"runtime_id"`
-	IssueID               string         `json:"issue_id"`
-	WorkspaceID           string         `json:"workspace_id"`
-	Status                string         `json:"status"`
-	Priority              int32          `json:"priority"`
-	DispatchedAt          *string        `json:"dispatched_at"`
-	StartedAt             *string        `json:"started_at"`
-	CompletedAt           *string        `json:"completed_at"`
-	Result                any            `json:"result"`
-	Error                 *string        `json:"error"`
-	Agent                 *TaskAgentData `json:"agent,omitempty"`
-	Repos                 []RepoData     `json:"repos,omitempty"`
-	CreatedAt             string         `json:"created_at"`
-	PriorSessionID        string         `json:"prior_session_id,omitempty"`        // session ID from a previous task on same issue
-	PriorWorkDir          string         `json:"prior_work_dir,omitempty"`          // work_dir from a previous task on same issue
-	TriggerCommentID      *string        `json:"trigger_comment_id,omitempty"`      // comment that triggered this task
-	TriggerCommentContent string         `json:"trigger_comment_content,omitempty"` // content of the triggering comment
-	ChatSessionID         string         `json:"chat_session_id,omitempty"`         // non-empty for chat tasks
-	ChatMessage           string         `json:"chat_message,omitempty"`            // user message for chat tasks
+	ID                      string          `json:"id"`
+	AgentID                 string          `json:"agent_id"`
+	RuntimeID               string          `json:"runtime_id"`
+	IssueID                 string          `json:"issue_id"`
+	WorkspaceID             string          `json:"workspace_id"`
+	Status                  string          `json:"status"`
+	Priority                int32           `json:"priority"`
+	DispatchedAt            *string         `json:"dispatched_at"`
+	StartedAt               *string         `json:"started_at"`
+	CompletedAt             *string         `json:"completed_at"`
+	Result                  any             `json:"result"`
+	Error                   *string         `json:"error"`
+	FailureReason           string          `json:"failure_reason,omitempty"` // see TaskService.MaybeRetryFailedTask
+	Attempt                 int32           `json:"attempt"`
+	MaxAttempts             int32           `json:"max_attempts"`
+	ParentTaskID            *string         `json:"parent_task_id,omitempty"`
+	Agent                   *TaskAgentData  `json:"agent,omitempty"`
+	Repos                   []RepoData      `json:"repos,omitempty"`
+	CreatedAt               string          `json:"created_at"`
+	PriorSessionID          string          `json:"prior_session_id,omitempty"`          // session ID from a previous task on same issue
+	PriorWorkDir            string          `json:"prior_work_dir,omitempty"`            // work_dir from a previous task on same issue
+	TriggerCommentID        *string         `json:"trigger_comment_id,omitempty"`        // comment that triggered this task
+	TriggerCommentContent   string          `json:"trigger_comment_content,omitempty"`   // content of the triggering comment
+	TriggerAuthorType       string          `json:"trigger_author_type,omitempty"`       // "agent" or "member" — author kind of the triggering comment
+	TriggerAuthorName       string          `json:"trigger_author_name,omitempty"`       // display name of the triggering comment author
+	ChatSessionID           string          `json:"chat_session_id,omitempty"`           // non-empty for chat tasks
+	ChatMessage             string          `json:"chat_message,omitempty"`              // user message for chat tasks
+	AutopilotRunID          string          `json:"autopilot_run_id,omitempty"`          // non-empty for autopilot-spawned tasks
+	AutopilotID             string          `json:"autopilot_id,omitempty"`              // autopilot that spawned this task
+	AutopilotTitle          string          `json:"autopilot_title,omitempty"`           // autopilot title used as task context
+	AutopilotDescription    string          `json:"autopilot_description,omitempty"`     // autopilot description used as task prompt
+	AutopilotSource         string          `json:"autopilot_source,omitempty"`          // manual, schedule, webhook, or api
+	AutopilotTriggerPayload json.RawMessage `json:"autopilot_trigger_payload,omitempty"` // optional trigger payload for webhook/api runs
 }
 
 // TaskAgentData holds agent info included in claim responses so the daemon
@@ -144,12 +159,17 @@ type TaskAgentData struct {
 	CustomEnv    map[string]string        `json:"custom_env,omitempty"`
 	CustomArgs   []string                 `json:"custom_args,omitempty"`
 	McpConfig    json.RawMessage          `json:"mcp_config,omitempty"`
+	Model        string                   `json:"model,omitempty"`
 }
 
 func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 	var result any
 	if t.Result != nil {
 		json.Unmarshal(t.Result, &result)
+	}
+	failureReason := ""
+	if t.FailureReason.Valid {
+		failureReason = t.FailureReason.String
 	}
 	return AgentTaskResponse{
 		ID:               uuidToString(t.ID),
@@ -163,8 +183,17 @@ func taskToResponse(t db.AgentTaskQueue) AgentTaskResponse {
 		CompletedAt:      timestampToPtr(t.CompletedAt),
 		Result:           result,
 		Error:            textToPtr(t.Error),
+		FailureReason:    failureReason,
+		Attempt:          t.Attempt,
+		MaxAttempts:      t.MaxAttempts,
+		ParentTaskID:     uuidToPtr(t.ParentTaskID),
 		CreatedAt:        timestampToString(t.CreatedAt),
 		TriggerCommentID: uuidToPtr(t.TriggerCommentID),
+		// Surface task source so the UI can distinguish issue-linked tasks
+		// from chat-spawned or autopilot-spawned ones; all three may arrive
+		// with issue_id = "" once a task has no linked issue.
+		ChatSessionID:  uuidToString(t.ChatSessionID),
+		AutopilotRunID: uuidToString(t.AutopilotRunID),
 	}
 }
 
@@ -265,6 +294,13 @@ type CreateAgentRequest struct {
 	McpConfig          json.RawMessage   `json:"mcp_config"`
 	Visibility         string            `json:"visibility"`
 	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
+	Model              string            `json:"model"`
+	// Template records which template slug was used to seed this agent
+	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
+	// the caller didn't come from a template picker — the `agent_created`
+	// event still fires with `template=""`, which is the correct signal
+	// for "manually authored agent".
+	Template string `json:"template"`
 }
 
 func decodeJSONBodyWithRawFields(body io.Reader, dst any) (map[string]json.RawMessage, error) {
@@ -327,6 +363,16 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Probe workspace agent count BEFORE the insert so the funnel has a
+	// clean "first agent ever in this workspace" signal — Step 4 of
+	// onboarding always lands in this branch. A non-fatal read: if the
+	// list fails we fall through with isFirstAgent=false rather than
+	// blocking creation, since the primary DB operation is the insert.
+	isFirstAgent := false
+	if existing, listErr := h.Queries.ListAgents(r.Context(), parseUUID(workspaceID)); listErr == nil {
+		isFirstAgent = len(existing) == 0
+	}
+
 	rc, _ := json.Marshal(req.RuntimeConfig)
 	if req.RuntimeConfig == nil {
 		rc = []byte("{}")
@@ -362,6 +408,7 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 		CustomEnv:          ce,
 		CustomArgs:         ca,
 		McpConfig:          mc,
+		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
 	})
 	if err != nil {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
@@ -385,6 +432,16 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	resp := agentToResponse(agent)
 	actorType, actorID := h.resolveActor(r, ownerID, workspaceID)
 	h.publish(protocol.EventAgentCreated, workspaceID, actorType, actorID, map[string]any{"agent": resp})
+
+	h.Analytics.Capture(analytics.AgentCreated(
+		ownerID,
+		workspaceID,
+		uuidToString(agent.ID),
+		runtime.Provider,
+		req.Template,
+		isFirstAgent,
+	))
+
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -401,6 +458,7 @@ type UpdateAgentRequest struct {
 	Visibility         *string            `json:"visibility"`
 	Status             *string            `json:"status"`
 	MaxConcurrentTasks *int32             `json:"max_concurrent_tasks"`
+	Model              *string            `json:"model"`
 }
 
 // canViewAgentEnv checks whether the requesting user is allowed to see the
@@ -522,6 +580,9 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxConcurrentTasks != nil {
 		params.MaxConcurrentTasks = pgtype.Int4{Int32: *req.MaxConcurrentTasks, Valid: true}
+	}
+	if req.Model != nil {
+		params.Model = pgtype.Text{String: *req.Model, Valid: true}
 	}
 
 	agent, err = h.Queries.UpdateAgent(r.Context(), params)

@@ -1,18 +1,22 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -261,7 +265,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			"launched_by": req.LaunchedBy,
 		})
 
-		registered, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
+		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
 			WorkspaceID: parseUUID(req.WorkspaceID),
 			DaemonID:    strToText(req.DaemonID),
 			Name:        name,
@@ -275,6 +279,34 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
 			return
+		}
+
+		registered := db.AgentRuntime{
+			ID:             row.ID,
+			WorkspaceID:    row.WorkspaceID,
+			DaemonID:       row.DaemonID,
+			Name:           row.Name,
+			RuntimeMode:    row.RuntimeMode,
+			Provider:       row.Provider,
+			Status:         row.Status,
+			DeviceInfo:     row.DeviceInfo,
+			Metadata:       row.Metadata,
+			LastSeenAt:     row.LastSeenAt,
+			CreatedAt:      row.CreatedAt,
+			UpdatedAt:      row.UpdatedAt,
+			OwnerID:        row.OwnerID,
+			LegacyDaemonID: row.LegacyDaemonID,
+		}
+
+		if row.Inserted {
+			h.Analytics.Capture(analytics.RuntimeRegistered(
+				uuidToString(ownerID),
+				req.WorkspaceID,
+				uuidToString(registered.ID),
+				provider,
+				runtime.Version,
+				req.CLIVersion,
+			))
 		}
 
 		// Seamless migration from the previous hostname-derived identity. The
@@ -453,25 +485,55 @@ type DaemonHeartbeatRequest struct {
 	RuntimeID string `json:"runtime_id"`
 }
 
+// heartbeatHasPendingTimeout bounds the cheap HasPending probe on the
+// heartbeat hot path. Probes are read-only (ZCARD in Redis) so a timeout is
+// ack-safe: the worst case is "we didn't find out if anything was queued this
+// tick" and the next heartbeat (default 15s later) will try again.
+//
+// PopPending is deliberately NOT bounded this way — its Redis implementation
+// runs a Lua claim script whose ZREM + SET-running side effects cannot be
+// cleanly un-run from the client side if the context expires mid-script. We
+// therefore only invoke PopPending after HasPending confirms there is work
+// to claim, so we never start a claim we might have to abort.
+const heartbeatHasPendingTimeout = 1 * time.Second
+
 func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	var (
+		outcome                                                                  = "unauth"
+		runtimeID                                                                string
+		authMs, updateMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs int64
+		probeSkillsTimedOut, probeImportTimedOut                                 bool
+	)
+	defer func() {
+		logHeartbeatEndpointSlow(runtimeID, outcome, start, authMs, updateMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs, probeSkillsTimedOut, probeImportTimedOut)
+	}()
+
 	var req DaemonHeartbeatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		outcome = "bad_body"
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.RuntimeID == "" {
+		outcome = "missing_runtime_id"
 		writeError(w, http.StatusBadRequest, "runtime_id is required")
 		return
 	}
+	runtimeID = req.RuntimeID
 
 	// Verify the caller owns this runtime's workspace.
 	if _, ok := h.requireDaemonRuntimeAccess(w, r, req.RuntimeID); !ok {
 		return
 	}
+	authMs = time.Since(start).Milliseconds()
 
+	updateStart := time.Now()
 	_, err := h.Queries.UpdateAgentRuntimeHeartbeat(r.Context(), parseUUID(req.RuntimeID))
+	updateMs = time.Since(updateStart).Milliseconds()
 	if err != nil {
+		outcome = "error_update"
 		writeError(w, http.StatusInternalServerError, "heartbeat failed")
 		return
 	}
@@ -479,11 +541,6 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("daemon heartbeat", "runtime_id", req.RuntimeID)
 
 	resp := map[string]any{"status": "ok"}
-
-	// Check for pending ping requests for this runtime.
-	if pending := h.PingStore.PopPending(req.RuntimeID); pending != nil {
-		resp["pending_ping"] = map[string]string{"id": pending.ID}
-	}
 
 	// Check for pending update requests for this runtime.
 	if pending := h.UpdateStore.PopPending(req.RuntimeID); pending != nil {
@@ -493,21 +550,151 @@ func (h *Handler) DaemonHeartbeat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Check for pending model-list requests for this runtime.
+	if pending := h.ModelListStore.PopPending(req.RuntimeID); pending != nil {
+		resp["pending_model_list"] = map[string]string{"id": pending.ID}
+	}
+
+	// Probe then claim the local-skill list queue. The probe is bounded so a
+	// slow shared store cannot stall the heartbeat on empty-queue ticks; the
+	// claim runs unbounded (it inherits only r.Context()) because its Lua
+	// side effects cannot be safely aborted mid-script.
+	probeSkillsStart := time.Now()
+	probeSkillsCtx, cancelProbeSkills := context.WithTimeout(r.Context(), heartbeatHasPendingTimeout)
+	hasSkills, probeErr := h.LocalSkillListStore.HasPending(probeSkillsCtx, req.RuntimeID)
+	cancelProbeSkills()
+	probeSkillsMs = time.Since(probeSkillsStart).Milliseconds()
+	switch {
+	case probeErr == nil && hasSkills:
+		popStart := time.Now()
+		pendingSkills, popErr := h.LocalSkillListStore.PopPending(r.Context(), req.RuntimeID)
+		popSkillsMs = time.Since(popStart).Milliseconds()
+		if popErr != nil {
+			slog.Warn("local skill list PopPending failed", "error", popErr, "runtime_id", req.RuntimeID)
+		} else if pendingSkills != nil {
+			resp["pending_local_skills"] = map[string]string{"id": pendingSkills.ID}
+		}
+	case probeErr != nil:
+		if errors.Is(probeErr, context.DeadlineExceeded) || errors.Is(probeErr, context.Canceled) {
+			probeSkillsTimedOut = true
+			slog.Warn("local skill list HasPending timed out", "runtime_id", req.RuntimeID, "elapsed_ms", probeSkillsMs)
+		} else {
+			slog.Warn("local skill list HasPending failed", "error", probeErr, "runtime_id", req.RuntimeID)
+		}
+	}
+
+	// Same probe-then-claim pattern for the import queue.
+	probeImportStart := time.Now()
+	probeImportCtx, cancelProbeImport := context.WithTimeout(r.Context(), heartbeatHasPendingTimeout)
+	hasImport, probeErr := h.LocalSkillImportStore.HasPending(probeImportCtx, req.RuntimeID)
+	cancelProbeImport()
+	probeImportMs = time.Since(probeImportStart).Milliseconds()
+	switch {
+	case probeErr == nil && hasImport:
+		popStart := time.Now()
+		pendingImport, popErr := h.LocalSkillImportStore.PopPending(r.Context(), req.RuntimeID)
+		popImportMs = time.Since(popStart).Milliseconds()
+		if popErr != nil {
+			slog.Warn("local skill import PopPending failed", "error", popErr, "runtime_id", req.RuntimeID)
+		} else if pendingImport != nil {
+			resp["pending_local_skill_import"] = map[string]string{
+				"id":        pendingImport.ID,
+				"skill_key": pendingImport.SkillKey,
+			}
+		}
+	case probeErr != nil:
+		if errors.Is(probeErr, context.DeadlineExceeded) || errors.Is(probeErr, context.Canceled) {
+			probeImportTimedOut = true
+			slog.Warn("local skill import HasPending timed out", "runtime_id", req.RuntimeID, "elapsed_ms", probeImportMs)
+		} else {
+			slog.Warn("local skill import HasPending failed", "error", probeErr, "runtime_id", req.RuntimeID)
+		}
+	}
+
+	outcome = "ok"
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// logHeartbeatEndpointSlow emits one structured log when /api/daemon/heartbeat
+// exceeds 500ms, splitting auth / update / probe / pop phases for both queues
+// so the prod tail can be attributed without flooding logs at normal rates.
+// Mirrors logClaimEndpointSlow for consistency.
+func logHeartbeatEndpointSlow(runtimeID, outcome string, start time.Time, authMs, updateMs, probeSkillsMs, popSkillsMs, probeImportMs, popImportMs int64, probeSkillsTimedOut, probeImportTimedOut bool) {
+	totalMs := time.Since(start).Milliseconds()
+	if totalMs < 500 && !probeSkillsTimedOut && !probeImportTimedOut {
+		return
+	}
+	slog.Info("heartbeat_endpoint slow",
+		"runtime_id", runtimeID,
+		"outcome", outcome,
+		"total_ms", totalMs,
+		"auth_ms", authMs,
+		"update_ms", updateMs,
+		"probe_skills_ms", probeSkillsMs,
+		"pop_skills_ms", popSkillsMs,
+		"probe_import_ms", probeImportMs,
+		"pop_import_ms", popImportMs,
+		"probe_skills_timed_out", probeSkillsTimedOut,
+		"probe_import_timed_out", probeImportTimedOut,
+	)
+}
+
+// logClaimEndpointSlow emits one structured log when the /tasks/claim endpoint
+// exceeds 500ms, splitting auth / claim / response-build phases so the prod
+// tail can be diagnosed without flooding logs at normal poll rates.
+func logClaimEndpointSlow(runtimeID, outcome string, start time.Time, authMs, claimMs, buildMs int64) {
+	totalMs := time.Since(start).Milliseconds()
+	if totalMs < 500 {
+		return
+	}
+	slog.Info("claim_endpoint slow",
+		"runtime_id", runtimeID,
+		"outcome", outcome,
+		"total_ms", totalMs,
+		"auth_ms", authMs,
+		"claim_ms", claimMs,
+		"build_ms", buildMs,
+	)
 }
 
 // ClaimTaskByRuntime atomically claims the next queued task for a runtime.
 // The response includes the agent's name and skills, fetched fresh from the DB.
 func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
+	start := time.Now()
 
-	// Verify the caller owns this runtime's workspace.
-	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+	var (
+		outcome                  = "unauth"
+		authMs, claimMs, buildMs int64
+		buildStart               time.Time
+	)
+	defer func() {
+		// Emit at function exit so error / unauth paths also carry timing.
+		// build_ms is computed from buildStart only when we entered the
+		// response-build phase (otherwise stays 0).
+		if !buildStart.IsZero() {
+			buildMs = time.Since(buildStart).Milliseconds()
+		}
+		logClaimEndpointSlow(runtimeID, outcome, start, authMs, claimMs, buildMs)
+	}()
+
+	// Verify the caller owns this runtime's workspace. The runtime's
+	// workspace_id is the authoritative value a claimed task must match
+	// below — a task whose resolved workspace doesn't equal this runtime's
+	// workspace is rejected even if it was enqueued against this
+	// runtime_id (defense-in-depth against upstream routing bugs).
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
 		return
 	}
+	runtimeWorkspaceID := uuidToString(runtime.WorkspaceID)
+	authMs = time.Since(start).Milliseconds()
 
+	claimStart := time.Now()
 	task, err := h.TaskService.ClaimTaskForRuntime(r.Context(), parseUUID(runtimeID))
+	claimMs = time.Since(claimStart).Milliseconds()
 	if err != nil {
+		outcome = "error_claim"
 		writeError(w, http.StatusInternalServerError, "failed to claim task: "+err.Error())
 		return
 	}
@@ -515,8 +702,12 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	if task == nil {
 		slog.Debug("no task to claim", "runtime_id", runtimeID)
 		writeJSON(w, http.StatusOK, map[string]any{"task": nil})
+		outcome = "no_task"
 		return
 	}
+
+	outcome = "claimed"
+	buildStart = time.Now()
 
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp := taskToResponse(*task)
@@ -546,6 +737,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			CustomEnv:    customEnv,
 			CustomArgs:   customArgs,
 			McpConfig:    mcpConfig,
+			Model:        agent.Model.String,
 		}
 	}
 
@@ -563,10 +755,30 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 
 		// Fetch the triggering comment content so the daemon can embed it
 		// directly in the agent prompt (prevents the agent from ignoring comments
-		// when stale output files exist in a reused workdir).
+		// when stale output files exist in a reused workdir). Also surface the
+		// comment author's kind and display name so the agent knows whether it
+		// was triggered by a human or by another agent — a signal used by the
+		// harness instructions to avoid mention loops between agents.
 		if task.TriggerCommentID.Valid {
 			if comment, err := h.Queries.GetComment(r.Context(), task.TriggerCommentID); err == nil {
 				resp.TriggerCommentContent = comment.Content
+				resp.TriggerAuthorType = comment.AuthorType
+				switch comment.AuthorType {
+				case "agent":
+					if comment.AuthorID.Valid {
+						if a, err := h.Queries.GetAgent(r.Context(), comment.AuthorID); err == nil {
+							resp.TriggerAuthorName = a.Name
+						}
+					}
+				case "member":
+					// For member-authored comments, AuthorID is a user UUID
+					// (see handler.resolveActor) — look up the user's display name.
+					if comment.AuthorID.Valid {
+						if u, err := h.Queries.GetUser(r.Context(), comment.AuthorID); err == nil {
+							resp.TriggerAuthorName = u.Name
+						}
+					}
+				}
 			}
 		}
 
@@ -594,12 +806,25 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					resp.Repos = repos
 				}
 			}
-			// Resume from the chat session's persistent session.
+			// Resume from the chat session's persistent session, falling back
+			// to the most recent task that recorded a session_id when the
+			// chat_session pointer is missing or stale (e.g. a previous task
+			// failed before reporting completion). Without this fallback a
+			// single failed turn would silently drop the entire conversation
+			// memory on the next message.
 			if cs.SessionID.Valid {
 				resp.PriorSessionID = cs.SessionID.String
 			}
 			if cs.WorkDir.Valid {
 				resp.PriorWorkDir = cs.WorkDir.String
+			}
+			if resp.PriorSessionID == "" {
+				if prior, err := h.Queries.GetLastChatTaskSession(r.Context(), cs.ID); err == nil && prior.SessionID.Valid {
+					resp.PriorSessionID = prior.SessionID.String
+					if prior.WorkDir.Valid && resp.PriorWorkDir == "" {
+						resp.PriorWorkDir = prior.WorkDir.String
+					}
+				}
 			}
 			// Load the latest user message for the chat prompt.
 			if msgs, err := h.Queries.ListChatMessages(r.Context(), cs.ID); err == nil && len(msgs) > 0 {
@@ -612,6 +837,63 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	// Autopilot run_only task: resolve workspace from autopilot_run →
+	// autopilot, and include the autopilot instructions because there is no
+	// issue for the agent to fetch.
+	if task.AutopilotRunID.Valid {
+		if run, err := h.Queries.GetAutopilotRun(r.Context(), task.AutopilotRunID); err == nil {
+			resp.AutopilotID = uuidToString(run.AutopilotID)
+			resp.AutopilotSource = run.Source
+			if run.TriggerPayload != nil {
+				resp.AutopilotTriggerPayload = json.RawMessage(run.TriggerPayload)
+			}
+			if ap, err := h.Queries.GetAutopilot(r.Context(), run.AutopilotID); err == nil {
+				resp.AutopilotTitle = ap.Title
+				if ap.Description.Valid {
+					resp.AutopilotDescription = ap.Description.String
+				}
+				if resp.WorkspaceID == "" {
+					resp.WorkspaceID = uuidToString(ap.WorkspaceID)
+				}
+				if len(resp.Repos) == 0 {
+					if ws, err := h.Queries.GetWorkspace(r.Context(), ap.WorkspaceID); err == nil && ws.Repos != nil {
+						var repos []RepoData
+						if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
+							resp.Repos = repos
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Workspace isolation check: the daemon uses this response's workspace_id
+	// as the only authority for MULTICA_WORKSPACE_ID in the agent env. An
+	// empty value would make the CLI silently fall back to the user-global
+	// config and talk to whatever workspace the user happened to last
+	// configure; a value that doesn't match the runtime's workspace means
+	// upstream routed a foreign-workspace task here. Both cases must hard-
+	// fail AND cancel the just-dispatched task so the queue / agent status
+	// don't sit stuck until the stale-task sweeper fires minutes later.
+	if resp.WorkspaceID == "" || resp.WorkspaceID != runtimeWorkspaceID {
+		outcome = "error_workspace"
+		slog.Error("task claim: workspace isolation check failed, cancelling task",
+			"task_id", uuidToString(task.ID),
+			"runtime_id", runtimeID,
+			"runtime_workspace", runtimeWorkspaceID,
+			"resolved_workspace", resp.WorkspaceID,
+			"has_issue", task.IssueID.Valid,
+			"has_chat", task.ChatSessionID.Valid,
+			"has_autopilot_run", task.AutopilotRunID.Valid,
+		)
+		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
+			slog.Error("task claim: cancel after workspace check failed",
+				"task_id", uuidToString(task.ID), "error", cerr)
+		}
+		writeError(w, http.StatusInternalServerError, "task workspace isolation check failed")
+		return
 	}
 
 	slog.Info("task claimed by runtime", "task_id", uuidToString(task.ID), "runtime_id", runtimeID, "agent_id", uuidToString(task.AgentID), "prior_session", resp.PriorSessionID)
@@ -728,8 +1010,46 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.emitIssueExecutedOnFirstCompletion(r, task)
+
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
+}
+
+// emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at
+// and fires the issue_executed analytics event iff this is the first task on
+// the issue to reach terminal done. Retries / re-assignments / comment-
+// triggered follow-ups hit the WHERE first_executed_at IS NULL clause and
+// no-op, so the funnel counts unique issues, not tasks.
+func (h *Handler) emitIssueExecutedOnFirstCompletion(r *http.Request, task *db.AgentTaskQueue) {
+	if task == nil {
+		return
+	}
+	marked, err := h.Queries.MarkIssueFirstExecuted(r.Context(), task.IssueID)
+	if err != nil {
+		if !isNotFound(err) {
+			slog.Warn("analytics: mark issue first-executed failed", "issue_id", uuidToString(task.IssueID), "error", err)
+		}
+		return
+	}
+	var durationMS int64
+	if task.StartedAt.Valid && task.CompletedAt.Valid {
+		durationMS = task.CompletedAt.Time.Sub(task.StartedAt.Time).Milliseconds()
+	}
+	// distinct_id prefers the human creator so agent-driven events flow into
+	// the issue-author's person profile (same place signup and
+	// workspace_created land). Agent-created issues keep the agent id with a
+	// prefix so PostHog doesn't merge them into a user by accident.
+	distinct := uuidToString(marked.CreatorID)
+	if marked.CreatorType == "agent" {
+		distinct = "agent:" + distinct
+	}
+	h.Analytics.Capture(analytics.IssueExecuted(
+		distinct,
+		uuidToString(marked.WorkspaceID),
+		uuidToString(marked.ID),
+		durationMS,
+	))
 }
 
 // ReportTaskUsage stores per-task token usage. Called independently of
@@ -792,7 +1112,10 @@ func (h *Handler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
 
 // FailTask marks a running task as failed.
 type TaskFailRequest struct {
-	Error string `json:"error"`
+	Error         string `json:"error"`
+	SessionID     string `json:"session_id,omitempty"`
+	WorkDir       string `json:"work_dir,omitempty"`
+	FailureReason string `json:"failure_reason,omitempty"`
 }
 
 func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
@@ -809,14 +1132,14 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.TaskService.FailTask(r.Context(), parseUUID(taskID), req.Error)
+	task, err := h.TaskService.FailTask(r.Context(), parseUUID(taskID), req.Error, req.SessionID, req.WorkDir, req.FailureReason)
 	if err != nil {
 		slog.Warn("fail task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error)
+	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
 }
 
@@ -890,7 +1213,7 @@ func (h *Handler) ReportTaskMessages(w http.ResponseWriter, r *http.Request) {
 		})
 
 		if workspaceID != "" {
-			h.publish(protocol.EventTaskMessage, workspaceID, "system", "", protocol.TaskMessagePayload{
+			h.publishTask(protocol.EventTaskMessage, workspaceID, "system", "", taskID, protocol.TaskMessagePayload{
 				TaskID:  taskID,
 				IssueID: uuidToString(task.IssueID),
 				Seq:     msg.Seq,

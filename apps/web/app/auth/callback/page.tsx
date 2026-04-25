@@ -3,9 +3,9 @@
 import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { useAuthStore } from "@multica/core/auth";
+import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
 import { workspaceKeys } from "@multica/core/workspace/queries";
-import { paths } from "@multica/core/paths";
+import { paths, resolvePostAuthDestination } from "@multica/core/paths";
 import { api } from "@multica/core/api";
 import {
   Card,
@@ -42,10 +42,12 @@ function CallbackContent() {
     const state = searchParams.get("state") || "";
     const stateParts = state.split(",").filter(Boolean);
     const providerPart = stateParts.find((p) => p.startsWith("provider:"));
-    const provider = providerPart?.slice(9) || "google";
+    const provider = providerPart?.slice(9) === "feishu" ? "feishu" : "google";
     const isDesktop = stateParts.includes("platform:desktop");
     const nextPart = stateParts.find((p) => p.startsWith("next:"));
-    const nextUrl = nextPart ? nextPart.slice(5) : null;
+    // Strip "next:" prefix, then drop anything that isn't a safe relative path
+    // so an attacker-controlled `state=next:https://evil` cannot redirect here.
+    const nextUrl = sanitizeNextUrl(nextPart ? nextPart.slice(5) : null);
 
     const redirectUri = `${window.location.origin}/auth/callback`;
     const completeWebLogin =
@@ -56,6 +58,7 @@ function CallbackContent() {
         : api.googleLogin.bind(api);
 
     if (isDesktop) {
+      // Desktop flow: exchange code for token, then redirect via deep link.
       exchangeDesktopToken(code, redirectUri)
         .then(({ token }) => {
           setDesktopToken(token);
@@ -67,19 +70,17 @@ function CallbackContent() {
       return;
     }
 
+    // Normal web flow.
     completeWebLogin(code, redirectUri)
-      .then(async () => {
+      .then(async (loggedInUser) => {
         const wsList = await api.listWorkspaces();
         qc.setQueryData(workspaceKeys.list(), wsList);
-        // URL is now the source of truth for the current workspace — the
-        // [workspaceSlug]/layout syncs stores + cookie once we navigate.
-        // Honor ?next= first (e.g. came from /invite/{id}), otherwise land
-        // in the first workspace's issues, or /workspaces/new for zero-workspace users.
-        const [first] = wsList;
-        const defaultDest = first
-          ? paths.workspace(first.slug).issues()
-          : paths.newWorkspace();
-        router.push(nextUrl || defaultDest);
+        const onboarded = loggedInUser.onboarded_at != null;
+        if (!onboarded) {
+          router.push(paths.onboarding());
+          return;
+        }
+        router.push(nextUrl || resolvePostAuthDestination(wsList, onboarded));
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : "Login failed");

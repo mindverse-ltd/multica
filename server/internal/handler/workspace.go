@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -200,6 +201,12 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create workspace")
 		return
 	}
+
+	// "Is this the user's first workspace?" is derived in PostHog by looking
+	// at whether they have a prior workspace_created event, not stamped at
+	// emit time. Stamping here would race under concurrent creates without
+	// a schema change, and the event stream answers the question exactly.
+	h.Analytics.Capture(analytics.WorkspaceCreated(userID, uuidToString(ws.ID)))
 
 	slog.Info("workspace created", append(logger.RequestAttrs(r), "workspace_id", uuidToString(ws.ID), "name", ws.Name, "slug", ws.Slug)...)
 	writeJSON(w, http.StatusCreated, workspaceToResponse(ws))
@@ -591,6 +598,19 @@ func (h *Handler) LeaveWorkspace(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	workspaceID := workspaceIDFromURL(r, "id")
+
+	// Defense in depth: the route is already gated by the
+	// RequireWorkspaceRoleFromURL("owner") middleware, but we re-check here
+	// so that the handler is safe regardless of how it gets wired up
+	// (direct calls in tests, future router refactors, etc.).
+	requester, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
+		return
+	}
+	if requester.Role != "owner" {
+		writeError(w, http.StatusForbidden, "insufficient permissions")
+		return
+	}
 
 	if err := h.Queries.DeleteWorkspace(r.Context(), parseUUID(workspaceID)); err != nil {
 		slog.Warn("delete workspace failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)

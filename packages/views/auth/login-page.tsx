@@ -61,6 +61,8 @@ interface LoginPageProps {
   onFeishuLogin?: () => void;
   /** When set, automatically starts the selected OAuth login once the page is ready. */
   autoStartProvider?: "google" | "feishu";
+  /** Slot rendered at the bottom of the sign-in card, below the OAuth buttons. */
+  extra?: ReactNode;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +109,7 @@ export function LoginPage({
   onGoogleLogin,
   onFeishuLogin,
   autoStartProvider,
+  extra,
 }: LoginPageProps) {
   const qc = useQueryClient();
   const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
@@ -540,6 +543,7 @@ export function LoginPage({
               )}
             </>
           )}
+          {extra && <div className="w-full pt-1 text-center">{extra}</div>}
         </CardFooter>
       </Card>
     </div>

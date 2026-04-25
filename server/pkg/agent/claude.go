@@ -59,7 +59,8 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	}()
 
 	cmd := exec.CommandContext(runCtx, execPath, args...)
-	b.cfg.Logger.Debug("agent command", "exec", execPath, "args", args)
+	hideAgentWindow(cmd)
+	b.cfg.Logger.Info("agent command", "exec", execPath, "args", args)
 	cmd.WaitDelay = 10 * time.Second
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
@@ -149,7 +150,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if msg.SessionID != "" {
 					sessionID = msg.SessionID
 				}
-				trySend(msgCh, Message{Type: MessageStatus, Status: "running"})
+				trySend(msgCh, Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
 			case "result":
 				closeStdin()
 				sessionID = msg.SessionID
@@ -189,12 +190,20 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 		b.cfg.Logger.Info("claude finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
 
+		reportedSessionID := resolveSessionID(opts.ResumeSessionID, sessionID, finalStatus == "failed")
+		if reportedSessionID != sessionID {
+			b.cfg.Logger.Info("claude resume did not land; clearing fresh session id for daemon fallback",
+				"requested_resume", opts.ResumeSessionID,
+				"emitted_session", sessionID,
+			)
+		}
+
 		resCh <- Result{
 			Status:     finalStatus,
 			Output:     output.String(),
 			Error:      finalError,
 			DurationMs: duration.Milliseconds(),
-			SessionID:  sessionID,
+			SessionID:  reportedSessionID,
 			Usage:      usage,
 		}
 	}()
@@ -438,6 +447,20 @@ func buildClaudeInput(prompt string) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
+// resolveSessionID decides which session id to report on the Result. When the
+// caller requested --resume but claude emitted a fresh, different session id
+// AND the run failed, the resume did not land (claude prints
+// "No conversation found with session ID: ..." to stderr, generates a fresh
+// session, and exits). Returning "" in that case keeps the daemon's
+// retry-with-fresh-session fallback able to trigger, instead of silently
+// persisting a brand-new id as if resume had succeeded.
+func resolveSessionID(requestedResume, emitted string, failed bool) string {
+	if failed && requestedResume != "" && emitted != "" && emitted != requestedResume {
+		return ""
+	}
+	return emitted
+}
+
 func buildEnv(extra map[string]string) []string {
 	return mergeEnv(os.Environ(), extra)
 }
@@ -530,6 +553,7 @@ func writeMcpConfigToTemp(raw json.RawMessage) (string, error) {
 
 func detectCLIVersion(ctx context.Context, execPath string) (string, error) {
 	cmd := exec.CommandContext(ctx, execPath, "--version")
+	hideAgentWindow(cmd)
 	data, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("detect version for %s: %w", execPath, err)

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { User, StorageAdapter } from "../types";
+import { identify as identifyAnalytics, resetAnalytics } from "../analytics";
 import { ApiError, type ApiClient } from "../api/client";
 import { setCurrentWorkspace } from "../platform/workspace-storage";
 
@@ -24,6 +25,7 @@ export interface AuthState {
   loginWithToken: (token: string) => Promise<User>;
   logout: () => void;
   setUser: (user: User) => void;
+  refreshMe: () => Promise<void>;
 }
 
 export function createAuthStore(options: AuthStoreOptions) {
@@ -85,6 +87,7 @@ export function createAuthStore(options: AuthStoreOptions) {
         api.setToken(token);
       }
       onLogin?.();
+      identifyAnalytics(user.id, { email: user.email, name: user.name });
       set({ user });
       return user;
     },
@@ -96,6 +99,7 @@ export function createAuthStore(options: AuthStoreOptions) {
         api.setToken(token);
       }
       onLogin?.();
+      identifyAnalytics(user.id, { email: user.email, name: user.name });
       set({ user });
       return user;
     },
@@ -116,6 +120,7 @@ export function createAuthStore(options: AuthStoreOptions) {
       api.setToken(token);
       const user = await api.getMe();
       onLogin?.();
+      identifyAnalytics(user.id, { email: user.email, name: user.name });
       set({ user, isLoading: false });
       return user;
     },
@@ -128,11 +133,17 @@ export function createAuthStore(options: AuthStoreOptions) {
       storage.removeItem("multica_token");
       api.setToken(null);
       setCurrentWorkspace(null, null);
+      resetAnalytics();
       onLogout?.();
       set({ user: null });
     },
 
     setUser: (user: User) => {
+      set({ user });
+    },
+
+    refreshMe: async () => {
+      const user = await api.getMe();
       set({ user });
     },
   }));
