@@ -294,8 +294,16 @@ func discoverPiModels(ctx context.Context, executablePath string) ([]Model, erro
 }
 
 // parsePiModels accepts the `pi --list-models` output and extracts
-// model IDs. Pi's format uses `provider:model` rows; we normalize to
-// the same `provider/model` form as opencode for UI consistency.
+// model IDs. Pi prints a tabular format to stderr:
+//
+//	provider  model              context  max-out  thinking  images
+//	openai    gpt-4o             128K     16.4K    no         yes
+//	doubao    glm-4.7            200K     131.1K   yes        no
+//
+// Each data row has provider as the first field and model as the second;
+// we combine them into "provider/model" for UI consistency with opencode.
+// A legacy "provider:model" single-field format is also accepted so the
+// parser stays backward-compatible if pi's output format changes.
 func parsePiModels(output string) []Model {
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -306,20 +314,32 @@ func parsePiModels(output string) []Model {
 		if line == "" {
 			continue
 		}
-		first := strings.Fields(line)
-		if len(first) == 0 {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
 			continue
 		}
-		id := first[0]
-		if !strings.ContainsAny(id, ":/") {
+
+		// Skip the header row (first field is literally "provider").
+		if fields[0] == "provider" {
 			continue
 		}
-		// Normalize ":" to "/" since pi uses colon but opencode/UI uses slash.
-		id = strings.Replace(id, ":", "/", 1)
+
+		var id string
+		if len(fields) >= 2 {
+			// Tabular format: provider is field[0], model is field[1].
+			id = fields[0] + "/" + fields[1]
+		} else if strings.ContainsAny(fields[0], ":/") {
+			// Legacy single-field format: "provider:model".
+			id = strings.Replace(fields[0], ":", "/", 1)
+		} else {
+			continue
+		}
+
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
+
 		provider := ""
 		if i := strings.Index(id, "/"); i > 0 {
 			provider = id[:i]
@@ -341,10 +361,10 @@ func parsePiModels(output string) []Model {
 // creatable manual-entry input instead of blocking the form.
 func discoverHermesModels(ctx context.Context, executablePath string) ([]Model, error) {
 	return discoverACPModels(ctx, executablePath, acpDiscoveryProvider{
-		defaultBin:      "hermes",
-		clientName:      "multica-model-discovery",
-		extraEnv:        []string{"HERMES_YOLO_MODE=1"},
-		tmpdirPrefix:    "multica-hermes-discovery-",
+		defaultBin:   "hermes",
+		clientName:   "multica-model-discovery",
+		extraEnv:     []string{"HERMES_YOLO_MODE=1"},
+		tmpdirPrefix: "multica-hermes-discovery-",
 	})
 }
 
