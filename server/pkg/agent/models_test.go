@@ -129,7 +129,38 @@ nonprefixed-line
 	}
 }
 
-func TestParsePiModels(t *testing.T) {
+func TestParsePiModelsTabularFormat(t *testing.T) {
+	// Actual output from pi v0.22.4+ (the format pi has used since
+	// --list-models was introduced in December 2025).
+	input := `provider  model                                       context  max-out  thinking  images
+doubao    glm-4.7                                     200K     131.1K   yes       no    
+doubao    kimi-k2.5                                   256K     131.1K   no        no    
+glm       glm-5.1                                     124.8K   131.1K   yes       no    
+google    gemini-2.5-pro                              1.0M     65.5K    yes       yes   
+openai    gpt-4o                                      128K     16.4K    no        yes   
+openai    gpt-4o                                      128K     16.4K    no        yes   
+`
+	models := parsePiModels(input)
+	if len(models) != 5 {
+		t.Fatalf("expected 5 models (header skipped, duplicate deduped), got %d: %+v", len(models), models)
+	}
+	if models[0].ID != "doubao/glm-4.7" {
+		t.Errorf("unexpected first model: %+v", models[0])
+	}
+	if models[0].Provider != "doubao" {
+		t.Errorf("expected provider doubao, got %q", models[0].Provider)
+	}
+	if models[2].ID != "glm/glm-5.1" {
+		t.Errorf("unexpected third model: %+v", models[2])
+	}
+	if models[4].ID != "openai/gpt-4o" {
+		t.Errorf("unexpected last model: %+v", models[4])
+	}
+}
+
+func TestParsePiModelsLegacyColonFormat(t *testing.T) {
+	// Legacy "provider:model" format — kept for backward compatibility
+	// in case pi's output format changes in the future.
 	input := `openai:gpt-4o
 anthropic:claude-opus-4-7
 openai:gpt-4o
@@ -141,6 +172,13 @@ bareword
 	}
 	if models[0].ID != "openai/gpt-4o" {
 		t.Errorf("expected colon normalized to slash: %+v", models[0])
+	}
+}
+
+func TestParsePiModelsEmpty(t *testing.T) {
+	models := parsePiModels("")
+	if len(models) != 0 {
+		t.Errorf("expected 0 models for empty input, got %d", len(models))
 	}
 }
 
