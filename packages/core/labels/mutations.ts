@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { labelKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
+import { issueKeys } from "../issues/queries";
+import { onIssueLabelsChanged } from "../issues/ws-updaters";
 import type {
   Label,
   CreateLabelRequest,
@@ -60,6 +62,9 @@ export function useUpdateLabel() {
       // stale copy of this label is refetched. The list cache is the source
       // of truth; byIssue views will re-render with the fresh data.
       qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
+      // Issues now embed labels (denormalized snapshot), so a rename/recolor
+      // also has to refresh the issues caches that hold those snapshots.
+      qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
     },
   });
 }
@@ -84,6 +89,9 @@ export function useDeleteLabel() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
+      // A deleted label still lives in cached issue.labels arrays until we
+      // refetch — invalidate so list/board chips drop the orphan.
+      qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
     },
   });
 }
@@ -100,6 +108,9 @@ export function useAttachLabel(issueId: string) {
       // invalidation to refetch.
       if (data && Array.isArray(data.labels)) {
         qc.setQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId), data);
+        // Mirror into the issues list / detail caches so list/board chips
+        // update immediately for the actor without waiting for the WS event.
+        onIssueLabelsChanged(qc, wsId, issueId, data.labels);
       }
     },
     onSettled: () => {
@@ -116,13 +127,20 @@ export function useDetachLabel(issueId: string) {
     onMutate: async (labelId) => {
       await qc.cancelQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
       const prev = qc.getQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId));
-      qc.setQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId), (old) =>
-        old ? { ...old, labels: old.labels.filter((l: Label) => l.id !== labelId) } : old,
-      );
+      const next = prev
+        ? { ...prev, labels: prev.labels.filter((l: Label) => l.id !== labelId) }
+        : undefined;
+      if (next) {
+        qc.setQueryData<IssueLabelsResponse>(labelKeys.byIssue(wsId, issueId), next);
+        onIssueLabelsChanged(qc, wsId, issueId, next.labels);
+      }
       return { prev };
     },
     onError: (_err, _id, ctx) => {
-      if (ctx?.prev) qc.setQueryData(labelKeys.byIssue(wsId, issueId), ctx.prev);
+      if (ctx?.prev) {
+        qc.setQueryData(labelKeys.byIssue(wsId, issueId), ctx.prev);
+        onIssueLabelsChanged(qc, wsId, issueId, ctx.prev.labels);
+      }
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });

@@ -20,6 +20,7 @@ export interface CardProperties {
   dueDate: boolean;
   project: boolean;
   childProgress: boolean;
+  labels: boolean;
 }
 
 export interface ActorFilterValue {
@@ -41,6 +42,7 @@ export const CARD_PROPERTY_OPTIONS: { key: keyof CardProperties; label: string }
   { key: "assignee", label: "Assignee" },
   { key: "dueDate", label: "Due date" },
   { key: "project", label: "Project" },
+  { key: "labels", label: "Labels" },
   { key: "childProgress", label: "Sub-issue progress" },
 ];
 
@@ -92,6 +94,7 @@ export const viewStoreSlice = (set: StoreApi<IssueViewState>["setState"]): Issue
     dueDate: true,
     project: true,
     childProgress: true,
+    labels: true,
   },
   listCollapsedStatuses: [],
 
@@ -204,6 +207,22 @@ export const viewStorePersistOptions = (name: string) => ({
     cardProperties: state.cardProperties,
     listCollapsedStatuses: state.listCollapsedStatuses,
   }),
+  // Default Zustand merge is shallow, so a persisted `cardProperties` snapshot
+  // saved before a new toggle was introduced wins entirely and the new key is
+  // missing — the dropdown switch then reads `undefined` and renders unchecked
+  // even though defaults treat it as on. Deep-merge `cardProperties` so newly
+  // added toggles inherit their default value for existing users.
+  merge: (persisted: unknown, current: IssueViewState): IssueViewState => {
+    const p = (persisted ?? {}) as Partial<IssueViewState>;
+    return {
+      ...current,
+      ...p,
+      cardProperties: {
+        ...current.cardProperties,
+        ...(p.cardProperties ?? {}),
+      },
+    };
+  },
 });
 
 /** Factory: creates a vanilla StoreApi for use with React Context. */
