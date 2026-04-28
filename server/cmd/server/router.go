@@ -209,6 +209,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analytics
 		r.Post("/api/upload-file", h.UploadFile)
 		r.Post("/api/feedback", h.CreateFeedback)
 
+		// Admin routes (no workspace context required)
+		r.Get("/api/admin/users", h.ListAllUsers)
+
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
 			r.Post("/", h.CreateWorkspace)
@@ -231,6 +234,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analytics
 						r.Patch("/", h.UpdateMember)
 						r.Delete("/", h.DeleteMember)
 					})
+					r.Post("/members/by-user", h.CreateMemberByUserID)
 					r.Delete("/invitations/{invitationId}", h.RevokeInvitation)
 				})
 				// Owner-only access

@@ -44,6 +44,22 @@ UPDATE "user" SET
 WHERE id = $1
 RETURNING *;
 
+-- name: ListAllUsers :many
+SELECT id, name, email, avatar_url, onboarded_at, created_at, updated_at
+FROM "user"
+WHERE (sqlc.arg('search') = '' OR name ILIKE '%' || sqlc.arg('search') || '%' OR email ILIKE '%' || sqlc.arg('search') || '%')
+ORDER BY created_at DESC
+LIMIT sqlc.arg('lim')
+OFFSET sqlc.arg('offs');
+
+-- name: CountAllUsers :one
+SELECT COUNT(*) FROM "user"
+WHERE (sqlc.arg('search') = '' OR name ILIKE '%' || sqlc.arg('search') || '%' OR email ILIKE '%' || sqlc.arg('search') || '%');
+
+-- name: GetUserByID :one
+SELECT * FROM "user"
+WHERE id = $1;
+
 -- name: SetStarterContentState :one
 -- Atomically transition starter_content_state. The handler is
 -- responsible for checking the current value first (to decide between

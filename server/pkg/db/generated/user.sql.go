@@ -11,6 +11,18 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countAllUsers = `-- name: CountAllUsers :one
+SELECT COUNT(*) FROM "user"
+WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%')
+`
+
+func (q *Queries) CountAllUsers(ctx context.Context, search interface{}) (int64, error) {
+	row := q.db.QueryRow(ctx, countAllUsers, search)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO "user" (name, email, avatar_url)
 VALUES ($1, $2, $3)
@@ -90,6 +102,30 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 	return i, err
 }
 
+const getUserByID = `-- name: GetUserByID :one
+SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state FROM "user"
+WHERE id = $1
+`
+
+func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error) {
+	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.AvatarUrl,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.OnboardedAt,
+		&i.OnboardingQuestionnaire,
+		&i.CloudWaitlistEmail,
+		&i.CloudWaitlistReason,
+		&i.StarterContentState,
+	)
+	return i, err
+}
+
 const joinCloudWaitlist = `-- name: JoinCloudWaitlist :one
 UPDATE "user" SET
     cloud_waitlist_email = $2,
@@ -125,6 +161,59 @@ func (q *Queries) JoinCloudWaitlist(ctx context.Context, arg JoinCloudWaitlistPa
 		&i.StarterContentState,
 	)
 	return i, err
+}
+
+const listAllUsers = `-- name: ListAllUsers :many
+SELECT id, name, email, avatar_url, onboarded_at, created_at, updated_at
+FROM "user"
+WHERE ($1 = '' OR name ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%')
+ORDER BY created_at DESC
+LIMIT $3
+OFFSET $2
+`
+
+type ListAllUsersParams struct {
+	Search interface{} `json:"search"`
+	Offs   int32       `json:"offs"`
+	Lim    int32       `json:"lim"`
+}
+
+type ListAllUsersRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Name        string             `json:"name"`
+	Email       string             `json:"email"`
+	AvatarUrl   pgtype.Text        `json:"avatar_url"`
+	OnboardedAt pgtype.Timestamptz `json:"onboarded_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListAllUsers(ctx context.Context, arg ListAllUsersParams) ([]ListAllUsersRow, error) {
+	rows, err := q.db.Query(ctx, listAllUsers, arg.Search, arg.Offs, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListAllUsersRow{}
+	for rows.Next() {
+		var i ListAllUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Email,
+			&i.AvatarUrl,
+			&i.OnboardedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markUserOnboarded = `-- name: MarkUserOnboarded :one

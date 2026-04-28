@@ -140,6 +140,45 @@ func (q *Queries) ListExternalIdentitiesByUser(ctx context.Context, userID pgtyp
 	return items, nil
 }
 
+const listExternalIdentitiesByUsers = `-- name: ListExternalIdentitiesByUsers :many
+SELECT id, user_id, provider, provider_user_id, union_id, tenant_key, email, name, avatar_url, raw_profile, created_at, updated_at FROM external_identity
+WHERE user_id = ANY($1::uuid[])
+ORDER BY user_id, created_at ASC
+`
+
+func (q *Queries) ListExternalIdentitiesByUsers(ctx context.Context, dollar_1 []pgtype.UUID) ([]ExternalIdentity, error) {
+	rows, err := q.db.Query(ctx, listExternalIdentitiesByUsers, dollar_1)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ExternalIdentity{}
+	for rows.Next() {
+		var i ExternalIdentity
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.Provider,
+			&i.ProviderUserID,
+			&i.UnionID,
+			&i.TenantKey,
+			&i.Email,
+			&i.Name,
+			&i.AvatarUrl,
+			&i.RawProfile,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updateExternalIdentity = `-- name: UpdateExternalIdentity :one
 UPDATE external_identity
 SET
