@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { User, StorageAdapter } from "../types";
 import { identify as identifyAnalytics, resetAnalytics } from "../analytics";
-import { ApiError, type ApiClient } from "../api/client";
+import { ApiError, type ApiClient, type LoginResponse } from "../api/client";
 import { setCurrentWorkspace } from "../platform/workspace-storage";
 
 export interface AuthStoreOptions {
@@ -22,6 +22,7 @@ export interface AuthState {
   verifyCode: (email: string, code: string) => Promise<User>;
   loginWithGoogle: (code: string, redirectUri: string) => Promise<User>;
   loginWithFeishu: (code: string, redirectUri: string) => Promise<User>;
+  bindFeishuEmail: (sessionToken: string, email: string, code: string) => Promise<User>;
   loginWithToken: (token: string) => Promise<User>;
   logout: () => void;
   setUser: (user: User) => void;
@@ -105,14 +106,33 @@ export function createAuthStore(options: AuthStoreOptions) {
     },
 
     loginWithFeishu: async (code: string, redirectUri: string) => {
-      const { token, user } = await api.feishuLogin(code, redirectUri);
+      const response = await api.feishuLogin(code, redirectUri);
+      // Needs_email response is handled upstream in the callback page;
+      // by the time we reach here it's always a normal LoginResponse.
+      const lr = response as LoginResponse;
       if (!cookieAuth) {
-        storage.setItem("multica_token", token);
-        api.setToken(token);
+        storage.setItem("multica_token", lr.token);
+        api.setToken(lr.token);
       }
       onLogin?.();
-      set({ user });
-      return user;
+      set({ user: lr.user });
+      return lr.user;
+    },
+
+    bindFeishuEmail: async (sessionToken: string, email: string, code: string) => {
+      const lr = (await api.feishuBindEmail(
+        sessionToken,
+        email,
+        code,
+      )) as LoginResponse;
+      if (!cookieAuth) {
+        storage.setItem("multica_token", lr.token);
+        api.setToken(lr.token);
+      }
+      onLogin?.();
+      identifyAnalytics(lr.user.id, { email: lr.user.email, name: lr.user.name });
+      set({ user: lr.user });
+      return lr.user;
     },
 
     loginWithToken: async (token: string) => {

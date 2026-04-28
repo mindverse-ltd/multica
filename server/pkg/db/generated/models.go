@@ -243,6 +243,19 @@ type Feedback struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type FeishuPendingRegistration struct {
+	ID           pgtype.UUID        `json:"id"`
+	SessionToken string             `json:"session_token"`
+	OpenID       string             `json:"open_id"`
+	UnionID      pgtype.Text        `json:"union_id"`
+	TenantKey    pgtype.Text        `json:"tenant_key"`
+	Name         pgtype.Text        `json:"name"`
+	AvatarUrl    pgtype.Text        `json:"avatar_url"`
+	RawProfile   []byte             `json:"raw_profile"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
+}
+
 type InboxItem struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
