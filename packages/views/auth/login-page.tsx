@@ -63,6 +63,12 @@ interface LoginPageProps {
   autoStartProvider?: "google" | "feishu";
   /** Slot rendered at the bottom of the sign-in card, below the OAuth buttons. */
   extra?: ReactNode;
+  /** Feishu email binding session (user has no email, needs to input one). */
+  bindEmail?: {
+    sessionToken: string;
+    name?: string | null;
+    avatarUrl?: string | null;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,9 +116,12 @@ export function LoginPage({
   onFeishuLogin,
   autoStartProvider,
   extra,
+  bindEmail,
 }: LoginPageProps) {
   const qc = useQueryClient();
-  const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
+  const [step, setStep] = useState<"email" | "code" | "cli_confirm" | "bind_email" | "bind_email_code">(
+    bindEmail ? "bind_email" : "email",
+  );
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
@@ -305,6 +314,55 @@ export function LoginPage({
     window.location.href = `https://accounts.feishu.cn/open-apis/authen/v1/authorize?${params}`;
   }, [feishu, onFeishuLogin]);
 
+  const handleBindEmailSendCode = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
+      if (!email) {
+        setError("Email is required");
+        return;
+      }
+      setLoading(true);
+      setError("");
+      try {
+        await useAuthStore.getState().sendCode(email);
+        setStep("bind_email_code");
+        setCode("");
+        setCooldown(60);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to send code",
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [email],
+  );
+
+  const handleBindEmailVerify = useCallback(
+    async (value: string) => {
+      if (!bindEmail || value.length !== 6) return;
+      setLoading(true);
+      setError("");
+      try {
+        await useAuthStore
+          .getState()
+          .bindFeishuEmail(bindEmail.sessionToken, email, value);
+        const wsList = await api.listWorkspaces();
+        qc.setQueryData(workspaceKeys.list(), wsList);
+        onTokenObtained?.();
+        onSuccess();
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Invalid or expired code",
+        );
+        setCode("");
+        setLoading(false);
+      }
+    },
+    [bindEmail, email, onSuccess, onTokenObtained, qc],
+  );
+
   useEffect(() => {
     if (autoStartRef.current || !autoStartProvider || step !== "email") return;
     if (existingUser) return;
@@ -435,6 +493,125 @@ export function LoginPage({
               }}
             >
               Back
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bind email - code verification step
+  // ---------------------------------------------------------------------------
+
+  if (step === "bind_email_code" && bindEmail) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            {logo && <div className="mx-auto mb-4">{logo}</div>}
+            <CardTitle className="text-2xl">Check your email</CardTitle>
+            <CardDescription>
+              We sent a verification code to{" "}
+              <span className="font-medium text-foreground">{email}</span>
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col items-center gap-4">
+            <InputOTP
+              maxLength={6}
+              value={code}
+              onChange={(value) => {
+                setCode(value);
+                if (value.length === 6) handleBindEmailVerify(value);
+              }}
+              disabled={loading}
+            >
+              <InputOTPGroup>
+                <InputOTPSlot index={0} />
+                <InputOTPSlot index={1} />
+                <InputOTPSlot index={2} />
+                <InputOTPSlot index={3} />
+                <InputOTPSlot index={4} />
+                <InputOTPSlot index={5} />
+              </InputOTPGroup>
+            </InputOTP>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={cooldown > 0}
+                className="text-primary underline-offset-4 hover:underline disabled:text-muted-foreground disabled:no-underline disabled:cursor-not-allowed"
+              >
+                {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+              </button>
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              onClick={() => {
+                setStep("bind_email");
+                setCode("");
+                setError("");
+              }}
+            >
+              Back
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bind email step
+  // ---------------------------------------------------------------------------
+
+  if (step === "bind_email" && bindEmail) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            {logo && <div className="mx-auto mb-4">{logo}</div>}
+            <CardTitle className="text-2xl">Complete your sign up</CardTitle>
+            <CardDescription>
+              Your Feishu account doesn't have an email. Enter your email to
+              continue.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              id="bind-email-form"
+              onSubmit={handleBindEmailSendCode}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <Label htmlFor="bind-email">Email</Label>
+                <Input
+                  id="bind-email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          </CardContent>
+          <CardFooter className="flex flex-col gap-3">
+            <Button
+              type="submit"
+              form="bind-email-form"
+              className="w-full"
+              size="lg"
+              disabled={!email || loading}
+            >
+              {loading ? "Sending code..." : "Continue"}
             </Button>
           </CardFooter>
         </Card>

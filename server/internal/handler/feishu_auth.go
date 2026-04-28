@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/logger"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -113,14 +115,50 @@ func (h *Handler) FeishuLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	openID := strings.TrimSpace(profile.Data.OpenID)
+	hasEmail := strings.TrimSpace(profile.Data.Email) != ""
+	_, identityLookupErr := h.Queries.GetExternalIdentityByProvider(r.Context(), db.GetExternalIdentityByProviderParams{
+		Provider:       feishuProvider,
+		ProviderUserID: openID,
+	})
+
+	if isNotFound(identityLookupErr) && !hasEmail {
+		// First-time Feishu login, no email — needs email binding
+		pending, err := h.Queries.CreateFeishuPendingRegistration(r.Context(), db.CreateFeishuPendingRegistrationParams{
+			SessionToken: randomID(),
+			OpenID:       openID,
+			UnionID:      strToText(strings.TrimSpace(profile.Data.UnionID)),
+			TenantKey:    strToText(strings.TrimSpace(profile.Data.TenantKey)),
+			Name:         strToText(strings.TrimSpace(profile.Data.Name)),
+			AvatarUrl:    strToText(strings.TrimSpace(profile.Data.AvatarURL)),
+			RawProfile:   rawProfile,
+			ExpiresAt:    pgtype.Timestamptz{Time: time.Now().Add(15 * time.Minute), Valid: true},
+		})
+		if err != nil {
+			slog.Error("feishu pending registration failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to create pending registration")
+			return
+		}
+
+		// Best-effort cleanup of expired pending registrations
+		_ = h.Queries.DeleteExpiredFeishuPendingRegistrations(r.Context())
+
+		slog.Info("feishu pending registration created", "session_token", pending.SessionToken, "open_id", openID)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"needs_email":   true,
+			"session_token": pending.SessionToken,
+			"name":          textToPtr(pending.Name),
+			"avatar_url":    textToPtr(pending.AvatarUrl),
+		})
+		return
+	}
+
 	user, err := h.resolveFeishuUser(r, profile, rawProfile)
 	if err != nil {
-		slog.Warn("feishu login failed", append(logger.RequestAttrs(r), "error", err, "open_id", profile.Data.OpenID, "email", profile.Data.Email)...)
+		slog.Warn("feishu login failed", append(logger.RequestAttrs(r), "error", err, "open_id", openID, "email", profile.Data.Email)...)
 		switch typed := err.(type) {
 		case accountConflictError:
 			writeError(w, http.StatusConflict, typed.Error())
-		case missingEmailError:
-			writeError(w, http.StatusBadRequest, typed.Error())
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to create or link user")
 		}
@@ -367,6 +405,191 @@ func (h *Handler) refreshExternalProfile(r *http.Request, user db.User, name, av
 		return user, nil
 	}
 	return updated, nil
+}
+
+type FeishuBindEmailRequest struct {
+	SessionToken string `json:"session_token"`
+	Email        string `json:"email"`
+	Code         string `json:"code"`
+}
+
+func (h *Handler) FeishuBindEmail(w http.ResponseWriter, r *http.Request) {
+	var req FeishuBindEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	sessionToken := strings.TrimSpace(req.SessionToken)
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	code := strings.TrimSpace(req.Code)
+
+	if sessionToken == "" || email == "" || code == "" {
+		writeError(w, http.StatusBadRequest, "session_token, email, and code are required")
+		return
+	}
+
+	// 1. Validate session_token and get pending registration
+	pending, err := h.Queries.GetFeishuPendingRegistration(r.Context(), sessionToken)
+	if err != nil {
+		if isNotFound(err) {
+			writeError(w, http.StatusBadRequest, "invalid or expired session")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to look up pending registration")
+		}
+		return
+	}
+
+	// 2. Verify email verification code
+	dbCode, err := h.Queries.GetLatestVerificationCode(r.Context(), email)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid or expired verification code")
+		return
+	}
+
+	isMasterCode := code == "888888" && os.Getenv("APP_ENV") != "production"
+	if !isMasterCode && subtle.ConstantTimeCompare([]byte(code), []byte(dbCode.Code)) != 1 {
+		_ = h.Queries.IncrementVerificationCodeAttempts(r.Context(), dbCode.ID)
+		writeError(w, http.StatusBadRequest, "invalid or expired verification code")
+		return
+	}
+
+	_ = h.Queries.MarkVerificationCodeUsed(r.Context(), dbCode.ID)
+
+	// 3. Check if email is already registered
+	existingUser, err := h.Queries.GetUserByEmail(r.Context(), email)
+	if err == nil {
+		// Email already exists — link Feishu identity to existing user
+		tx, txErr := h.TxStarter.Begin(r.Context())
+		if txErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to start transaction")
+			return
+		}
+		defer tx.Rollback(r.Context())
+
+		qtx := h.Queries.WithTx(tx)
+
+		_, createErr := qtx.CreateExternalIdentity(r.Context(), db.CreateExternalIdentityParams{
+			UserID:         existingUser.ID,
+			Provider:       feishuProvider,
+			ProviderUserID: pending.OpenID,
+			UnionID:        pending.UnionID,
+			TenantKey:      pending.TenantKey,
+			Email:          strToText(email),
+			Name:           pending.Name,
+			AvatarUrl:      pending.AvatarUrl,
+			RawProfile:     pending.RawProfile,
+		})
+		if createErr != nil {
+			if isUniqueViolation(createErr) {
+				writeError(w, http.StatusConflict, "Feishu account already linked to another user")
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to link Feishu identity")
+			}
+			return
+		}
+
+		_ = qtx.DeleteFeishuPendingRegistration(r.Context(), pending.ID)
+
+		if commitErr := tx.Commit(r.Context()); commitErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to finalize")
+			return
+		}
+
+		tokenString, jwtErr := h.issueJWT(existingUser)
+		if jwtErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate token")
+			return
+		}
+
+		_ = auth.SetAuthCookies(w, tokenString)
+
+		slog.Info("feishu identity linked to existing user", "user_id", uuidToString(existingUser.ID), "email", email, "open_id", pending.OpenID)
+		writeJSON(w, http.StatusOK, LoginResponse{
+			Token: tokenString,
+			User:  userToResponse(existingUser),
+		})
+		return
+	}
+	if !isNotFound(err) {
+		writeError(w, http.StatusInternalServerError, "failed to look up user")
+		return
+	}
+
+	// 4. Create new user with real email
+	name := strings.TrimSpace(pending.Name.String)
+	if name == "" {
+		if at := strings.Index(email, "@"); at > 0 {
+			name = email[:at]
+		} else {
+			name = email
+		}
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	qtx := h.Queries.WithTx(tx)
+
+	user, err := qtx.CreateUser(r.Context(), db.CreateUserParams{
+		Name:      name,
+		Email:     email,
+		AvatarUrl: pending.AvatarUrl,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "email already registered")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to create user")
+		}
+		return
+	}
+
+	_, err = qtx.CreateExternalIdentity(r.Context(), db.CreateExternalIdentityParams{
+		UserID:         user.ID,
+		Provider:       feishuProvider,
+		ProviderUserID: pending.OpenID,
+		UnionID:        pending.UnionID,
+		TenantKey:      pending.TenantKey,
+		Email:          strToText(email),
+		Name:           pending.Name,
+		AvatarUrl:      pending.AvatarUrl,
+		RawProfile:     pending.RawProfile,
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "Feishu account already linked to another user")
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to create external identity")
+		}
+		return
+	}
+
+	_ = qtx.DeleteFeishuPendingRegistration(r.Context(), pending.ID)
+
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to finalize")
+		return
+	}
+
+	// 5. Issue JWT and return
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	_ = auth.SetAuthCookies(w, tokenString)
+
+	slog.Info("user registered via feishu with email", "user_id", uuidToString(user.ID), "email", email, "open_id", pending.OpenID)
+	writeJSON(w, http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  userToResponse(user),
+	})
 }
 
 type missingEmailError string

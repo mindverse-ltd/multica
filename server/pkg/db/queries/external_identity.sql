@@ -32,6 +32,11 @@ SET
 WHERE id = $1
 RETURNING *;
 
+-- name: ListExternalIdentitiesByUsers :many
+SELECT * FROM external_identity
+WHERE user_id = ANY($1::uuid[])
+ORDER BY user_id, created_at ASC;
+
 -- name: ListExternalIdentitiesByUser :many
 SELECT * FROM external_identity
 WHERE user_id = $1

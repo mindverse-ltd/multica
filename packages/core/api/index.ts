@@ -1,7 +1,10 @@
 export { ApiClient, ApiError } from "./client";
 export type {
   ApiClientOptions,
+  FeishuLoginResponse,
+  FeishuNeedsEmailResponse,
   ImportStarterContentPayload,
+  LoginResponse,
   ImportStarterContentResponse,
   ImportStarterIssuePayload,
   ImportStarterWelcomeIssueTemplate,

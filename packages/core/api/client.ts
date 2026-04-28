@@ -102,6 +102,15 @@ export interface LoginResponse {
   user: User;
 }
 
+export interface FeishuNeedsEmailResponse {
+  needs_email: true;
+  session_token: string;
+  name?: string | null;
+  avatar_url?: string | null;
+}
+
+export type FeishuLoginResponse = LoginResponse | FeishuNeedsEmailResponse;
+
 // --- Starter content (post-onboarding import) -----------------------------
 // Shape mirrors the Go request/response in handler/onboarding.go.
 //
@@ -281,10 +290,25 @@ export class ApiClient {
     });
   }
 
-  async feishuLogin(code: string, redirectUri: string): Promise<LoginResponse> {
+  async feishuLogin(code: string, redirectUri: string): Promise<FeishuLoginResponse> {
     return this.fetch("/auth/feishu", {
       method: "POST",
       body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    });
+  }
+
+  async feishuBindEmail(
+    sessionToken: string,
+    email: string,
+    code: string,
+  ): Promise<FeishuLoginResponse> {
+    return this.fetch("/auth/feishu/bind", {
+      method: "POST",
+      body: JSON.stringify({
+        session_token: sessionToken,
+        email,
+        code,
+      }),
     });
   }
 

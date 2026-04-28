@@ -48,6 +48,7 @@ function LoginPageContent() {
   // the user's workspace list. Sanitize first so a crafted `?next=https://evil`
   // cannot bounce the user off-origin after a successful login.
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
+  const bindEmailSessionToken = searchParams.get("bind_email");
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
@@ -183,6 +184,15 @@ function LoginPageContent() {
       cliCallback={
         cliCallbackRaw && validateCliCallback(cliCallbackRaw)
           ? { url: cliCallbackRaw, state: cliState }
+          : undefined
+      }
+      bindEmail={
+        bindEmailSessionToken
+          ? {
+              sessionToken: bindEmailSessionToken,
+              name: searchParams.get("name"),
+              avatarUrl: searchParams.get("avatar_url"),
+            }
           : undefined
       }
       onTokenObtained={setLoggedInCookie}
