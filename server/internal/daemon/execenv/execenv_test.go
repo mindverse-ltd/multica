@@ -619,6 +619,33 @@ func TestWriteContextFilesOpencodeNativeSkills(t *testing.T) {
 	}
 }
 
+func TestWriteContextFilesKiroNativeSkills(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ctx := TaskContextForEnv{
+		IssueID: "kiro-skill-test",
+		AgentSkills: []SkillContextForEnv{
+			{Name: "Go Conventions", Content: "Follow Go conventions."},
+		},
+	}
+
+	if err := writeContextFiles(dir, "kiro", ctx); err != nil {
+		t.Fatalf("writeContextFiles failed: %v", err)
+	}
+
+	skillMd, err := os.ReadFile(filepath.Join(dir, ".kiro", "skills", "go-conventions", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("failed to read .kiro/skills/go-conventions/SKILL.md: %v", err)
+	}
+	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
+		t.Error("SKILL.md missing content")
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".agent_context", "skills")); !os.IsNotExist(err) {
+		t.Error("expected .agent_context/skills/ to NOT exist for Kiro provider")
+	}
+}
+
 func TestInjectRuntimeConfigOpencode(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -652,6 +679,36 @@ func TestInjectRuntimeConfigOpencode(t *testing.T) {
 	// CLAUDE.md should NOT exist.
 	if _, err := os.Stat(filepath.Join(dir, "CLAUDE.md")); !os.IsNotExist(err) {
 		t.Error("expected CLAUDE.md to NOT exist for OpenCode provider")
+	}
+}
+
+func TestInjectRuntimeConfigKiro(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	ctx := TaskContextForEnv{
+		IssueID:     "test-issue-id",
+		AgentSkills: []SkillContextForEnv{{Name: "Coding", Content: "Write good code."}},
+	}
+
+	if err := InjectRuntimeConfig(dir, "kiro", ctx); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("failed to read AGENTS.md: %v", err)
+	}
+
+	s := string(content)
+	if !strings.Contains(s, "Multica Agent Runtime") {
+		t.Error("AGENTS.md missing meta skill header")
+	}
+	if !strings.Contains(s, "Coding") {
+		t.Error("AGENTS.md missing skill name")
+	}
+	if !strings.Contains(s, "discovered automatically") {
+		t.Error("AGENTS.md missing native skill discovery hint")
 	}
 }
 
@@ -800,6 +857,35 @@ func TestInjectRuntimeConfigDirectsMultiLineWritesToStdin(t *testing.T) {
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("CLAUDE.md missing multi-line guidance %q\n---\n%s", want, s)
+		}
+	}
+}
+
+func TestInjectRuntimeConfigCodexEmphasizesStdinForFormattedComments(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := InjectRuntimeConfig(dir, "codex", TaskContextForEnv{
+		IssueID:          "issue-1",
+		TriggerCommentID: "comment-1",
+	}); err != nil {
+		t.Fatalf("InjectRuntimeConfig failed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	s := string(data)
+
+	for _, want := range []string{
+		"Codex-Specific Comment Formatting",
+		"always use `--content-stdin` with a HEREDOC",
+		"even for short single-line replies",
+		"Never use inline `--content` for agent-authored comments",
+		"Keep the same `--parent` value",
+		"do not rely on `\\n` escapes",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("AGENTS.md missing Codex multiline guidance %q\n---\n%s", want, s)
 		}
 	}
 }
@@ -1037,6 +1123,57 @@ func TestPrepareCodexHomeSeedsFromShared(t *testing.T) {
 	}
 	if string(data) != "Use superpowers." {
 		t.Errorf("plugin cache skill content = %q", data)
+	}
+}
+
+// Regression test for #1753 — Codex Desktop writes plugin-backed
+// `[[skills.config]]` entries without a `path` field, and the CLI's TOML
+// parser rejects them with `missing field path`. prepareCodexHome must drop
+// every `[[skills.config]]` entry while copying the user's config.toml so
+// the per-task home stays parseable.
+func TestPrepareCodexHomeStripsSkillsConfigEntries(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	sharedConfig := `model = "o3"
+
+[[skills.config]]
+path = "/Users/x/SKILL.md"
+enabled = false
+
+[[skills.config]]
+name = "superpowers:brainstorming"
+enabled = false
+
+[profiles.default]
+model = "o3"
+`
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.toml"), []byte(sharedConfig), 0o644); err != nil {
+		t.Fatalf("write shared config.toml: %v", err)
+	}
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("prepareCodexHome failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("read per-task config.toml: %v", err)
+	}
+	tomlStr := string(data)
+	if strings.Contains(tomlStr, "[[skills.config]]") {
+		t.Errorf("per-task config.toml should not inherit [[skills.config]] entries, got:\n%s", tomlStr)
+	}
+	if strings.Contains(tomlStr, "superpowers:brainstorming") {
+		t.Errorf("per-task config.toml should not retain plugin skill names, got:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, `model = "o3"`) {
+		t.Errorf("top-level keys should be preserved, got:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, "[profiles.default]") {
+		t.Errorf("unrelated tables should be preserved, got:\n%s", tomlStr)
 	}
 }
 

@@ -13,6 +13,8 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   AgentTask,
+  AgentActivityBucket,
+  AgentRunCount,
   AgentRuntime,
   InboxItem,
   IssueSubscriber,
@@ -33,6 +35,8 @@ import type {
   RuntimeUsage,
   IssueUsageSummary,
   RuntimeHourlyActivity,
+  RuntimeUsageByAgent,
+  RuntimeUsageByHour,
   RuntimeUpdate,
   RuntimeModelListRequest,
   RuntimeLocalSkillListRequest,
@@ -160,12 +164,17 @@ export interface ImportStarterContentResponse {
 export class ApiError extends Error {
   readonly status: number;
   readonly statusText: string;
+  // Raw decoded JSON body (when the server returned one). Carries structured
+  // error fields like `code` so callers can branch on machine-readable
+  // identifiers instead of pattern-matching the human-readable message.
+  readonly body?: unknown;
 
-  constructor(message: string, status: number, statusText: string) {
+  constructor(message: string, status: number, statusText: string, body?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.statusText = statusText;
+    this.body = body;
   }
 }
 
@@ -230,6 +239,19 @@ export class ApiClient {
     return fallback;
   }
 
+  // Reads the response body once for both human-readable error message and
+  // structured fields. The Response stream can only be consumed once, so
+  // both pieces have to come from a single read.
+  private async parseErrorBody(res: Response, fallback: string): Promise<{ message: string; body: unknown }> {
+    try {
+      const data = await res.json() as { error?: string };
+      const message = typeof data.error === "string" && data.error ? data.error : fallback;
+      return { message, body: data };
+    } catch {
+      return { message: fallback, body: undefined };
+    }
+  }
+
   private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
     const rid = createRequestId();
     const start = Date.now();
@@ -252,10 +274,10 @@ export class ApiClient {
 
     if (!res.ok) {
       if (res.status === 401) this.handleUnauthorized();
-      const message = await this.parseErrorMessage(res, `API error: ${res.status} ${res.statusText}`);
+      const { message, body } = await this.parseErrorBody(res, `API error: ${res.status} ${res.statusText}`);
       const logLevel = res.status === 404 ? "warn" : "error";
       this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
-      throw new ApiError(message, res.status, res.statusText);
+      throw new ApiError(message, res.status, res.statusText, body);
     }
 
     this.logger.info(`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms` });
@@ -430,6 +452,13 @@ export class ApiClient {
     });
   }
 
+  async quickCreateIssue(data: { agent_id: string; prompt: string }): Promise<{ task_id: string }> {
+    return this.fetch("/api/issues/quick-create", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
   async createFeedback(data: {
     message: string;
     url?: string;
@@ -597,6 +626,14 @@ export class ApiClient {
     return this.fetch(`/api/agents/${id}/restore`, { method: "POST" });
   }
 
+  // Bulk-cancel every active task (queued/dispatched/running) for the agent.
+  // Permission: agent owner or workspace admin/owner. Server returns the
+  // count of cancelled rows; broadcasts task:cancelled for each so other
+  // surfaces can clear their live cards.
+  async cancelAgentTasks(id: string): Promise<{ cancelled: number }> {
+    return this.fetch(`/api/agents/${id}/cancel-tasks`, { method: "POST" });
+  }
+
   async listRuntimes(params?: { workspace_id?: string; owner?: "me" }): Promise<AgentRuntime[]> {
     const search = new URLSearchParams();
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
@@ -616,6 +653,24 @@ export class ApiClient {
 
   async getRuntimeTaskActivity(runtimeId: string): Promise<RuntimeHourlyActivity[]> {
     return this.fetch(`/api/runtimes/${runtimeId}/activity`);
+  }
+
+  async getRuntimeUsageByAgent(
+    runtimeId: string,
+    params?: { days?: number },
+  ): Promise<RuntimeUsageByAgent[]> {
+    const search = new URLSearchParams();
+    if (params?.days) search.set("days", String(params.days));
+    return this.fetch(`/api/runtimes/${runtimeId}/usage/by-agent?${search}`);
+  }
+
+  async getRuntimeUsageByHour(
+    runtimeId: string,
+    params?: { days?: number },
+  ): Promise<RuntimeUsageByHour[]> {
+    const search = new URLSearchParams();
+    if (params?.days) search.set("days", String(params.days));
+    return this.fetch(`/api/runtimes/${runtimeId}/usage/by-hour?${search}`);
   }
 
   async initiateUpdate(
@@ -680,6 +735,28 @@ export class ApiClient {
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {
     return this.fetch(`/api/agents/${agentId}/tasks`);
+  }
+
+  // Workspace-scoped agent task snapshot: every active task
+  // (queued/dispatched/running) plus each agent's most recent terminal task.
+  // Powers the front-end's "active wins, else latest terminal" presence
+  // derivation; one fetch backs every per-agent presence read in the app.
+  // Workspace is resolved server-side from the X-Workspace-Slug header.
+  async getAgentTaskSnapshot(): Promise<AgentTask[]> {
+    return this.fetch(`/api/agent-task-snapshot`);
+  }
+
+  // Per-agent daily activity for the last 30 days, anchored on
+  // completed_at. One workspace-wide fetch backs both the Agents-list
+  // sparkline (uses trailing 7 buckets) and the agent detail "Last 30
+  // days" panel (uses all 30).
+  async getWorkspaceAgentActivity30d(): Promise<AgentActivityBucket[]> {
+    return this.fetch(`/api/agent-activity-30d`);
+  }
+
+  // Per-agent 30-day total run count for the Agents-list RUNS column.
+  async getWorkspaceAgentRunCounts(): Promise<AgentRunCount[]> {
+    return this.fetch(`/api/agent-run-counts`);
   }
 
   async getActiveTasksForIssue(issueId: string): Promise<{ tasks: AgentTask[] }> {

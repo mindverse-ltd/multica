@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -108,6 +109,19 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		h.LocalSkillListStore = handler.NewRedisLocalSkillListStore(rdb)
 		h.LocalSkillImportStore = handler.NewRedisLocalSkillImportStore(rdb)
 	}
+	// Auth caches: PAT cache is shared between the regular Auth middleware,
+	// the DaemonAuth fallback (mul_) path, and the revoke handler
+	// (invalidate). DaemonTokenCache backs the DaemonAuth mdt_ path. Both
+	// constructors return nil when rdb is nil — every consumer handles that
+	// as "no cache, always hit DB".
+	patCache := auth.NewPATCache(rdb)
+	daemonTokenCache := auth.NewDaemonTokenCache(rdb)
+	h.PATCache = patCache
+	h.DaemonTokenCache = daemonTokenCache
+
+	// Wire WS heartbeat after stores are finalized so the WS path uses the
+	// same (possibly Redis-backed) stores as the HTTP path.
+	daemonHub.SetHeartbeatHandler(h.HandleDaemonWSHeartbeat)
 	health := newServerHealth(pool)
 
 	r := chi.NewRouter()
@@ -152,7 +166,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// WebSocket
 	mc := &membershipChecker{queries: queries}
-	pr := &patResolver{queries: queries}
+	pr := &patResolver{queries: queries, cache: patCache}
 	slugResolver := realtime.SlugResolver(func(ctx context.Context, slug string) (string, error) {
 		ws, err := queries.GetWorkspaceBySlug(ctx, slug)
 		if err != nil {
@@ -185,7 +199,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {
-		r.Use(middleware.DaemonAuth(queries))
+		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache))
 
 		r.Post("/register", h.DaemonRegister)
 		r.Post("/deregister", h.DaemonDeregister)
@@ -217,7 +231,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 	// Protected API routes
 	r.Group(func(r chi.Router) {
-		r.Use(middleware.Auth(queries))
+		r.Use(middleware.Auth(queries, patCache))
 		r.Use(middleware.RefreshCloudFrontCookies(cfSigner))
 
 		// --- User-scoped routes (no workspace context required) ---
@@ -290,6 +304,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/child-progress", h.ChildIssueProgress)
 				r.Get("/", h.ListIssues)
 				r.Post("/", h.CreateIssue)
+				r.Post("/quick-create", h.QuickCreateIssue)
 				r.Post("/batch-update", h.BatchUpdateIssues)
 				r.Post("/batch-delete", h.BatchDeleteIssues)
 				r.Route("/{id}", func(r chi.Router) {
@@ -390,6 +405,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Put("/", h.UpdateAgent)
 					r.Post("/archive", h.ArchiveAgent)
 					r.Post("/restore", h.RestoreAgent)
+					r.Post("/cancel-tasks", h.CancelAgentTasks)
 					r.Get("/tasks", h.ListAgentTasks)
 					r.Get("/skills", h.ListAgentSkills)
 					r.Put("/skills", h.SetAgentSkills)
@@ -422,6 +438,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/", h.ListAgentRuntimes)
 				r.Route("/{runtimeId}", func(r chi.Router) {
 					r.Get("/usage", h.GetRuntimeUsage)
+					r.Get("/usage/by-agent", h.GetRuntimeUsageByAgent)
+					r.Get("/usage/by-hour", h.GetRuntimeUsageByHour)
 					r.Get("/activity", h.GetRuntimeTaskActivity)
 					r.Post("/update", h.InitiateUpdate)
 					r.Get("/update/{updateId}", h.GetUpdate)
@@ -437,6 +455,18 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Tasks (user-facing, with ownership check)
 			r.Post("/api/tasks/{taskId}/cancel", h.CancelTaskByUser)
+
+			// Workspace-wide agent task snapshot for presence derivation:
+			// every active task + each agent's most recent terminal task.
+			r.Get("/api/agent-task-snapshot", h.ListWorkspaceAgentTaskSnapshot)
+
+			// Workspace-wide daily agent activity (last 30d, anchored on
+			// completed_at). Backs the Agents-list sparkline (trailing 7d
+			// slice) AND the agent detail "Last 30 days" panel.
+			r.Get("/api/agent-activity-30d", h.GetWorkspaceAgentActivity30d)
+
+			// Workspace-wide 30-day run counts per agent for the Agents-list RUNS column.
+			r.Get("/api/agent-run-counts", h.GetWorkspaceAgentRunCounts)
 
 			r.Route("/api/chat/sessions", func(r chi.Router) {
 				r.Post("/", h.CreateChatSession)
@@ -483,19 +513,39 @@ func (mc *membershipChecker) IsMember(ctx context.Context, userID, workspaceID s
 }
 
 // patResolver implements realtime.PATResolver using database queries.
+// patCache is shared with the Auth and DaemonAuth middlewares so a token
+// revoke through any path invalidates the cache for all of them. Nil
+// cache is supported and degrades to direct DB lookups.
 type patResolver struct {
 	queries *db.Queries
+	cache   *auth.PATCache
 }
 
 func (pr *patResolver) ResolveToken(ctx context.Context, token string) (string, bool) {
 	hash := auth.HashToken(token)
+
+	if userID, ok := pr.cache.Get(ctx, hash); ok {
+		return userID, true
+	}
+
 	pat, err := pr.queries.GetPersonalAccessTokenByHash(ctx, hash)
 	if err != nil {
 		return "", false
 	}
-	// Best-effort: update last_used_at
+
+	userID := util.UUIDToString(pat.UserID)
+
+	var expiresAt time.Time
+	if pat.ExpiresAt.Valid {
+		expiresAt = pat.ExpiresAt.Time
+	}
+	pr.cache.Set(ctx, hash, userID, auth.TTLForExpiry(time.Now(), expiresAt))
+
+	// Cache miss = first WS auth in this TTL window. Refresh last_used_at;
+	// subsequent connects within the window skip the write.
 	go pr.queries.UpdatePersonalAccessTokenLastUsed(context.Background(), pat.ID)
-	return util.UUIDToString(pat.UserID), true
+
+	return userID, true
 }
 
 // parseUUID is a thin alias for util.MustParseUUID. Call sites here are all

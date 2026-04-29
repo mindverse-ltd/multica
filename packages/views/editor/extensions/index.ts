@@ -39,6 +39,7 @@ import { BaseMentionExtension } from "./mention-extension";
 import { createMentionSuggestion } from "./mention-suggestion";
 import { CodeBlockView } from "./code-block-view";
 import { createMarkdownPasteExtension } from "./markdown-paste";
+import { createMarkdownCopyExtension } from "./markdown-copy";
 import { createSubmitExtension } from "./submit-shortcut";
 import { createBlurShortcutExtension } from "./blur-shortcut";
 import { createFileUploadExtension } from "./file-upload";
@@ -90,6 +91,14 @@ export interface EditorExtensionsOptions {
   >;
   /** When true, bare Enter also submits (chat-style). Default false. */
   submitOnEnter?: boolean;
+  /**
+   * When true, the @mention extension is not registered at all. Use for
+   * editors where mentioning members/agents has no business meaning (e.g.
+   * agent system prompts) — typing `@` becomes inert and any pre-existing
+   * `[@user](mention://...)` markdown renders as plain text instead of being
+   * parsed into a mention node.
+   */
+  disableMentions?: boolean;
 }
 
 export function createEditorExtensions(
@@ -121,11 +130,21 @@ export function createEditorExtensions(
     InlineMathExtension,
     // 3-space indent so nested ordered lists survive CommonMark in ReadonlyContent.
     Markdown.configure({ indentation: { style: "space", size: 3 } }),
+    // Make Cmd+C / Cmd+X / drag write Markdown source to clipboard text/plain.
+    // Registered for both editable and readonly so users can copy from rendered
+    // comments and paste the original Markdown elsewhere.
+    createMarkdownCopyExtension(),
     FileCardExtension,
-    BaseMentionExtension.configure({
-      HTMLAttributes: { class: "mention" },
-      ...(editable && options.queryClient ? { suggestion: createMentionSuggestion(options.queryClient) } : {}),
-    }),
+    ...(options.disableMentions
+      ? []
+      : [
+          BaseMentionExtension.configure({
+            HTMLAttributes: { class: "mention" },
+            ...(editable && options.queryClient
+              ? { suggestion: createMentionSuggestion(options.queryClient) }
+              : {}),
+          }),
+        ]),
   ];
 
   if (editable) {

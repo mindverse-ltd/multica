@@ -146,6 +146,8 @@ The daemon auto-detects these AI CLIs on your PATH:
 | Gemini | `gemini` | Google's coding agent |
 | [Pi](https://pi.dev/) | `pi` | Pi coding agent |
 | [Cursor Agent](https://cursor.com/) | `cursor-agent` | Cursor's headless coding agent |
+| Kimi | `kimi` | Moonshot coding agent |
+| Kiro CLI | `kiro-cli` | Kiro ACP coding agent |
 
 You need at least one installed. The daemon registers each detected CLI as an available runtime.
 
@@ -179,8 +181,10 @@ Agent-specific overrides:
 |----------|-------------|
 | `MULTICA_CLAUDE_PATH` | Custom path to the `claude` binary |
 | `MULTICA_CLAUDE_MODEL` | Override the Claude model used |
+| `MULTICA_CLAUDE_ARGS` | Default extra arguments for Claude Code runs |
 | `MULTICA_CODEX_PATH` | Custom path to the `codex` binary |
 | `MULTICA_CODEX_MODEL` | Override the Codex model used |
+| `MULTICA_CODEX_ARGS` | Default extra arguments for Codex runs |
 | `MULTICA_OPENCODE_PATH` | Custom path to the `opencode` binary |
 | `MULTICA_OPENCODE_MODEL` | Override the OpenCode model used |
 | `MULTICA_OPENCLAW_PATH` | Custom path to the `openclaw` binary |
@@ -193,6 +197,12 @@ Agent-specific overrides:
 | `MULTICA_PI_MODEL` | Override the Pi model used |
 | `MULTICA_CURSOR_PATH` | Custom path to the `cursor-agent` binary |
 | `MULTICA_CURSOR_MODEL` | Override the Cursor Agent model used |
+| `MULTICA_KIMI_PATH` | Custom path to the `kimi` binary |
+| `MULTICA_KIMI_MODEL` | Override the Kimi model used |
+| `MULTICA_KIRO_PATH` | Custom path to the `kiro-cli` binary |
+| `MULTICA_KIRO_MODEL` | Override the Kiro model used |
+
+`MULTICA_CLAUDE_ARGS` and `MULTICA_CODEX_ARGS` are parsed with POSIX shellword quoting, so values such as `--model "gpt-5.1 codex" --sandbox read-only` are split like a shell command line. Agent arguments are applied in this order: hardcoded Multica defaults, daemon-wide env defaults, then per-agent `custom_args` from the task.
 
 ### Self-Hosted Server
 

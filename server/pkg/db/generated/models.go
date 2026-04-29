@@ -90,6 +90,7 @@ type AgentTaskQueue struct {
 	ParentTaskID     pgtype.UUID        `json:"parent_task_id"`
 	FailureReason    pgtype.Text        `json:"failure_reason"`
 	LastHeartbeatAt  pgtype.Timestamptz `json:"last_heartbeat_at"`
+	TriggerSummary   pgtype.Text        `json:"trigger_summary"`
 }
 
 type Attachment struct {
@@ -160,6 +161,8 @@ type ChatMessage struct {
 	Content       string             `json:"content"`
 	TaskID        pgtype.UUID        `json:"task_id"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	FailureReason pgtype.Text        `json:"failure_reason"`
+	ElapsedMs     pgtype.Int8        `json:"elapsed_ms"`
 }
 
 type ChatSession struct {

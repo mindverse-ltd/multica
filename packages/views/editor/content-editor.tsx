@@ -43,6 +43,7 @@ import { preprocessMarkdown } from "./utils/preprocess";
 import { openLink, isMentionHref } from "./utils/link-handler";
 import { EditorBubbleMenu } from "./bubble-menu";
 import { useLinkHover, LinkHoverCard } from "./link-hover-card";
+import "katex/dist/katex.min.css";
 import "./content-editor.css";
 
 // ---------------------------------------------------------------------------
@@ -81,12 +82,22 @@ interface ContentEditorProps {
    * under this ID and replaces the selection with a mention link.
    */
   currentIssueId?: string;
+  /**
+   * When true, the @mention extension is not registered. Use for editors
+   * where mentioning members/agents has no business meaning (e.g. agent
+   * system prompts, where the content is fed to an LLM as plain text).
+   */
+  disableMentions?: boolean;
 }
 
 interface ContentEditorRef {
   getMarkdown: () => string;
   clearContent: () => void;
   focus: () => void;
+  /** Drop focus from the editor — used by chat after send so the caret
+   *  stops competing with the StatusPill / streaming reply for the user's
+   *  attention. */
+  blur: () => void;
   uploadFile: (file: File) => void;
   /** True when file uploads are still in progress. */
   hasActiveUploads: () => boolean;
@@ -111,6 +122,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       showBubbleMenu = true,
       submitOnEnter = false,
       currentIssueId,
+      disableMentions = false,
     },
     ref,
   ) {
@@ -155,6 +167,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         onSubmitRef,
         onUploadFileRef,
         submitOnEnter,
+        disableMentions,
       }),
       onUpdate: ({ editor: ed }) => {
         if (!onUpdateRef.current) return;
@@ -223,6 +236,9 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       },
       focus: () => {
         editor?.commands.focus();
+      },
+      blur: () => {
+        editor?.commands.blur();
       },
       uploadFile: (file: File) => {
         if (!editor || !onUploadFileRef.current) return;

@@ -65,9 +65,27 @@ WHERE agent_id = $1
 ORDER BY created_at DESC;
 
 -- name: CreateAgentTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id)
-VALUES ($1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id))
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, trigger_comment_id, trigger_summary)
+VALUES ($1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id), sqlc.narg(trigger_summary))
 RETURNING *;
+
+-- name: CreateQuickCreateTask :one
+-- Quick-create tasks have no issue / chat / autopilot link; the entire job
+-- description (prompt, requester, workspace) lives in context JSONB. The
+-- daemon detects this variant via context.type == "quick_create".
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
+VALUES ($1, $2, NULL, 'queued', $3, $4)
+RETURNING *;
+
+-- name: LinkTaskToIssue :exec
+-- Attaches the issue a quick-create task produced back to the task row, once
+-- the agent has finished and the issue exists. Guarded by `issue_id IS NULL`
+-- so this never overwrites an issue id that was set at task creation (only
+-- quick-create tasks land here unset). Fixes the activity row staying on
+-- "Creating issue" forever after completion.
+UPDATE agent_task_queue
+SET issue_id = $2
+WHERE id = $1 AND issue_id IS NULL;
 
 -- name: CreateRetryTask :one
 -- Clones a parent task into a fresh queued attempt. Carries forward the
@@ -76,13 +94,13 @@ RETURNING *;
 -- max_attempts and trigger_comment_id are inherited.
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
-    status, priority, trigger_comment_id, context,
+    status, priority, trigger_comment_id, trigger_summary, context,
     session_id, work_dir,
     attempt, max_attempts, parent_task_id
 )
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
-    'queued', p.priority, p.trigger_comment_id, p.context,
+    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
     p.session_id, p.work_dir,
     p.attempt + 1, p.max_attempts, p.id
 FROM agent_task_queue p
@@ -110,10 +128,16 @@ SET status = 'cancelled', completed_at = now()
 WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched', 'running')
 RETURNING *;
 
--- name: CancelAgentTasksByAgent :exec
+-- name: CancelAgentTasksByAgent :many
+-- Bulk-cancel every active (queued/dispatched/running) task for an agent.
+-- Returns the affected rows so callers can broadcast task:cancelled events.
+-- Mirrors the shape of CancelAgentTasksByIssue / CancelAgentTasksByIssueAndAgent
+-- (also :many + RETURNING + completed_at) so the three sibling cancel paths
+-- behave consistently.
 UPDATE agent_task_queue
-SET status = 'cancelled'
-WHERE agent_id = $1 AND status IN ('queued', 'dispatched', 'running');
+SET status = 'cancelled', completed_at = now()
+WHERE agent_id = $1 AND status IN ('queued', 'dispatched', 'running')
+RETURNING *;
 
 -- name: CancelAgentTasksByTriggerComment :many
 -- Cancels active tasks whose trigger is the given comment. Called when a
@@ -136,6 +160,10 @@ WHERE id = $1;
 -- already dispatched or running. This allows different agents to work on the same
 -- issue in parallel while preventing a single agent from running duplicate tasks.
 -- Chat tasks (issue_id IS NULL) use chat_session_id for serialization instead.
+-- Quick-create tasks have no issue / chat / autopilot link, so they serialize on
+-- "any other quick-create-shaped task" (all four FKs NULL) for the same agent —
+-- otherwise a user mashing the create button could fire concurrent quick-creates
+-- whose completion lookup would race over "most recent issue by this agent".
 UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
@@ -148,6 +176,14 @@ WHERE id = (
             AND (
               (atq.issue_id IS NOT NULL AND active.issue_id = atq.issue_id)
               OR (atq.chat_session_id IS NOT NULL AND active.chat_session_id = atq.chat_session_id)
+              OR (
+                atq.issue_id IS NULL
+                AND atq.chat_session_id IS NULL
+                AND atq.autopilot_run_id IS NULL
+                AND active.issue_id IS NULL
+                AND active.chat_session_id IS NULL
+                AND active.autopilot_run_id IS NULL
+              )
             )
       )
     ORDER BY atq.priority DESC, atq.created_at ASC
@@ -276,6 +312,81 @@ ORDER BY priority DESC, created_at ASC;
 SELECT * FROM agent_task_queue
 WHERE issue_id = $1 AND status IN ('dispatched', 'running')
 ORDER BY created_at DESC;
+
+-- name: GetWorkspaceAgentRunCounts :many
+-- Total task runs per agent over the trailing 30 days, used by the Agents
+-- list RUNS column. 30-day window keeps the count meaningful (a long-dormant
+-- agent shouldn't show "5,420 runs from 2 years ago") and keeps the scan
+-- bounded as the workspace ages.
+SELECT
+    atq.agent_id,
+    COUNT(*)::int AS run_count
+FROM agent_task_queue atq
+JOIN agent a ON a.id = atq.agent_id
+WHERE a.workspace_id = $1
+  AND atq.created_at > now() - INTERVAL '30 days'
+GROUP BY atq.agent_id;
+
+-- name: GetWorkspaceAgentActivity30d :many
+-- Returns per-agent daily activity buckets for the last 30 days. Single
+-- workspace-wide read backs both surfaces:
+--   - Agents list ACTIVITY column — uses only the trailing 7 buckets
+--   - Agent detail "Last 30 days" panel — uses the full 30
+-- 30 days contains 7 days, so one fetch + a client-side .slice(-7) wins
+-- over fetching twice. Days with no completion produce no row; the
+-- front-end zero-fills.
+--
+-- Anchored on completed_at (not created_at) because the sparkline answers
+-- "what did this agent produce?" not "what was queued at it?". A task that's
+-- still in flight has no completed_at and contributes nothing here — that's
+-- correct: in-flight tasks are surfaced via the live presence indicator,
+-- not the historical trend.
+SELECT
+    atq.agent_id,
+    DATE_TRUNC('day', atq.completed_at)::timestamptz AS bucket,
+    COUNT(*)::int AS task_count,
+    COUNT(*) FILTER (WHERE atq.status = 'failed')::int AS failed_count
+FROM agent_task_queue atq
+JOIN agent a ON a.id = atq.agent_id
+WHERE a.workspace_id = $1
+  AND atq.completed_at IS NOT NULL
+  AND atq.completed_at > now() - INTERVAL '30 days'
+GROUP BY atq.agent_id, bucket
+ORDER BY atq.agent_id, bucket;
+
+-- name: ListWorkspaceAgentTaskSnapshot :many
+-- Returns the tasks needed to derive each agent's current presence:
+--   - All active tasks (queued / dispatched / running) — for working signal + counts
+--   - Each agent's most recent OUTCOME task (completed / failed) — for sticky
+--     failed signal
+-- The front-end picks "active wins, else latest outcome" — see derive-presence.ts.
+--
+-- Cancelled tasks are excluded from the outcome half on purpose: cancel is a
+-- procedural signal ("attempt aborted"), not an outcome. It tells us nothing
+-- about whether the agent works, so it must NOT be allowed to mask a prior
+-- failure. Concretely: if an agent fails and then the user cancels the queued
+-- retry (or the parent issue closes and cascades cancels), the failed signal
+-- has to stay red. Only a real success (completed) or a fresh attempt (active)
+-- clears it.
+--
+-- No UI windows in SQL: stickiness is decided by "is the latest outcome a
+-- failure?", not a 2-minute clock. JOINs agent because agent_task_queue has
+-- no workspace_id column.
+SELECT atq.* FROM agent_task_queue atq
+JOIN agent a ON a.id = atq.agent_id
+WHERE a.workspace_id = $1
+  AND atq.status IN ('queued', 'dispatched', 'running')
+
+UNION ALL
+
+SELECT t.* FROM (
+  SELECT DISTINCT ON (atq.agent_id) atq.*
+  FROM agent_task_queue atq
+  JOIN agent a ON a.id = atq.agent_id
+  WHERE a.workspace_id = $1
+    AND atq.status IN ('completed', 'failed')
+  ORDER BY atq.agent_id, atq.completed_at DESC NULLS LAST
+) t;
 
 -- name: ListTasksByIssue :many
 SELECT * FROM agent_task_queue

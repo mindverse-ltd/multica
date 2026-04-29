@@ -69,6 +69,14 @@ export function ChatInput({
     logger.info("input.send", { contentLength: content.length, draftKey: keyAtSend });
     onSend(content);
     editorRef.current?.clearContent();
+    // Drop focus so the caret doesn't keep blinking under the StatusPill /
+    // streaming reply that's about to take over the user's attention. The
+    // input is also `disabled` once isRunning flips, and a focused-but-
+    // disabled editor reads as a stale cursor. We deliberately don't auto-
+    // refocus on completion — that would interrupt the user if they're
+    // selecting text from the assistant reply; one click to refocus is
+    // a fair price for not stealing focus mid-action.
+    editorRef.current?.blur();
     clearInputDraft(keyAtSend);
     setIsEmpty(true);
   };
@@ -81,7 +89,7 @@ export function ChatInput({
 
   return (
     <div className="px-5 pb-3 pt-0">
-      <div className="relative mx-auto flex min-h-28 max-h-60 w-full max-w-4xl flex-col rounded-lg bg-card pb-9 border-1 border-border transition-colors focus-within:border-brand">
+      <div className="relative mx-auto flex min-h-16 max-h-40 w-full max-w-4xl flex-col rounded-lg bg-card pb-9 border-1 border-border transition-colors focus-within:border-brand">
         {topSlot}
         <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">
           <ContentEditor
