@@ -41,10 +41,6 @@ function CallbackContent() {
       const wsList = await api.listWorkspaces();
       qc.setQueryData(workspaceKeys.list(), wsList);
       const onboarded = loggedInUser.onboarded_at != null;
-      if (!onboarded) {
-        router.push(paths.onboarding());
-        return;
-      }
       const nextPart = searchParams
         .get("state")
         ?.split(",")
@@ -52,9 +48,25 @@ function CallbackContent() {
       const nextUrl = sanitizeNextUrl(
         nextPart ? nextPart.slice(5) : null,
       );
-      router.push(
-        nextUrl || resolvePostAuthDestination(wsList, onboarded),
-      );
+      if (nextUrl) {
+        router.push(nextUrl);
+        return;
+      }
+
+      if (!onboarded) {
+        try {
+          const invites = await api.listMyInvitations();
+          if (invites.length > 0) {
+            qc.setQueryData(workspaceKeys.myInvitations(), invites);
+            router.push(paths.invitations());
+            return;
+          }
+        } catch {
+          // fall through
+        }
+      }
+
+      router.push(resolvePostAuthDestination(wsList, onboarded));
     },
     [router, qc, searchParams],
   );
