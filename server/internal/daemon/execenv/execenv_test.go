@@ -1719,6 +1719,66 @@ func TestReuseRestoresCodexHome(t *testing.T) {
 	}
 }
 
+func TestReuseRefreshesCodexConfigTomlFromSharedHome(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.toml"), []byte(`model = "old-model"`), 0o644); err != nil {
+		t.Fatalf("write initial shared config.toml: %v", err)
+	}
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	workspacesRoot := t.TempDir()
+	env, err := Prepare(PrepareParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-codex-config-refresh",
+		TaskID:         "d5f6a7b8-c9d0-1234-efab-567890123456",
+		AgentName:      "Codex Agent",
+		Provider:       "codex",
+		Task:           TaskContextForEnv{IssueID: "reuse-config-refresh"},
+	}, testLogger())
+	if err != nil {
+		t.Fatalf("Prepare failed: %v", err)
+	}
+	defer env.Cleanup(true)
+
+	updatedSharedConfig := `model = "new-model"
+
+[[skills.config]]
+name = "plugin-backed-skill"
+enabled = true
+`
+	if err := os.WriteFile(filepath.Join(sharedHome, "config.toml"), []byte(updatedSharedConfig), 0o644); err != nil {
+		t.Fatalf("write updated shared config.toml: %v", err)
+	}
+
+	reused := Reuse(env.WorkDir, "codex", "", TaskContextForEnv{IssueID: "reuse-config-refresh"}, testLogger())
+	if reused == nil {
+		t.Fatal("Reuse returned nil")
+	}
+
+	data, err := os.ReadFile(filepath.Join(reused.CodexHome, "config.toml"))
+	if err != nil {
+		t.Fatalf("read reused config.toml: %v", err)
+	}
+	tomlStr := string(data)
+	if !strings.Contains(tomlStr, `model = "new-model"`) {
+		t.Errorf("reused config.toml did not pick up shared config update:\n%s", tomlStr)
+	}
+	if strings.Contains(tomlStr, `model = "old-model"`) {
+		t.Errorf("reused config.toml retained stale shared config:\n%s", tomlStr)
+	}
+	if strings.Contains(tomlStr, "[[skills.config]]") {
+		t.Errorf("refreshed config.toml should still strip inherited skills.config entries:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, multicaManagedBeginMarker) {
+		t.Errorf("refreshed config.toml missing sandbox managed block:\n%s", tomlStr)
+	}
+	if !strings.Contains(tomlStr, multicaMultiAgentBeginMarker) {
+		t.Errorf("refreshed config.toml missing multi-agent managed block:\n%s", tomlStr)
+	}
+}
+
 func TestReuseRestoresCodexPluginCache(t *testing.T) {
 	// Cannot use t.Parallel() with t.Setenv.
 

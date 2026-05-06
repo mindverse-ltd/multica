@@ -25,7 +25,6 @@ var codexSymlinkedFiles = []string{
 // Copies are isolated — changes don't affect the shared home.
 var codexCopiedFiles = []string{
 	"config.json",
-	"config.toml",
 	"instructions.md",
 }
 
@@ -87,6 +86,9 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 		if err := copyFileIfExists(src, dst); err != nil {
 			logger.Warn("execenv: codex-home copy failed", "file", name, "error", err)
 		}
+	}
+	if err := syncCodexConfigToml(filepath.Join(sharedHome, "config.toml"), filepath.Join(codexHome, "config.toml")); err != nil {
+		logger.Warn("execenv: codex-home config.toml sync failed", "error", err)
 	}
 
 	// Drop `[[skills.config]]` entries inherited from the user's
@@ -239,6 +241,24 @@ func copyFileIfExists(src, dst string) error {
 		return nil
 	}
 
+	return copyFile(src, dst)
+}
+
+// syncCodexConfigToml refreshes the per-task config.toml from the shared
+// Codex home on every prepare/reuse pass. The daemon rewrites its managed
+// blocks immediately afterward, so replacing this isolated copy is safe and
+// prevents old sessions from keeping a stale startup-time config forever.
+func syncCodexConfigToml(src, dst string) error {
+	if _, err := os.Stat(src); os.IsNotExist(err) {
+		if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale config.toml: %w", err)
+		}
+		return nil
+	}
+
+	if err := os.Remove(dst); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove existing config.toml: %w", err)
+	}
 	return copyFile(src, dst)
 }
 
