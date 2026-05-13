@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, Copy, Terminal } from "lucide-react";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
+import { useT } from "../../i18n";
 
 const INSTALL_CMD =
   "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
@@ -10,6 +11,7 @@ const DEFAULT_APP_URL = "https://multica.ai";
 const DEFAULT_SERVER_URL = "https://api.multica.ai";
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useT("onboarding");
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -23,7 +25,7 @@ function CopyButton({ text }: { text: string }) {
       type="button"
       onClick={handleCopy}
       className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-      aria-label="Copy"
+      aria-label={t(($) => $.cli_install.copy_aria)}
     >
       {copied ? (
         <Check className="h-3.5 w-3.5 text-success" />
@@ -63,19 +65,18 @@ export function CliInstallInstructions({
   appUrl?: string;
   serverUrl?: string;
 } = {}) {
+  const { t } = useT("onboarding");
   const setupCmd = `multica setup self-host --server-url ${serverUrl} --app-url ${appUrl}`;
   return (
     <Card className="w-full">
       <CardContent className="space-y-4 pt-4">
         <p className="text-xs leading-[1.55] text-muted-foreground">
-          You&apos;ll need an AI coding tool on this machine (Claude
-          Code, Codex, Cursor, …) for the daemon to do real work. Also
-          works on servers and remote dev boxes.
+          {t(($) => $.cli_install.intro)}
         </p>
-        <Step n={1} label="Install the Multica CLI" cmd={INSTALL_CMD} />
+        <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={INSTALL_CMD} />
         <Step
           n={2}
-          label="Configure, login, and start the daemon"
+          label={t(($) => $.cli_install.step2_label)}
           cmd={setupCmd}
         />
       </CardContent>

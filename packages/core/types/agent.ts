@@ -4,6 +4,14 @@ export type AgentRuntimeMode = "local" | "cloud";
 
 export type AgentVisibility = "workspace" | "private";
 
+// Runtime visibility is a separate axis from agent visibility — different
+// vocabulary because it gates a different action. "private" (default) means
+// only the runtime owner and workspace admins can bind agents to it;
+// "public" opens binding to any workspace member. Older backends that
+// haven't shipped MUL-2062 omit the field; the consumer must default to
+// "private" so the strictest behavior is the fallback.
+export type RuntimeVisibility = "private" | "public";
+
 export interface RuntimeDevice {
   id: string;
   workspace_id: string;
@@ -16,6 +24,9 @@ export interface RuntimeDevice {
   device_info: string;
   metadata: Record<string, unknown>;
   owner_id: string | null;
+  /** Defaults to "private" when the backend predates the visibility flag. */
+  visibility: RuntimeVisibility;
+  timezone: string;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;
@@ -95,6 +106,11 @@ export interface AgentTask {
    * with a meaningful title instead of falling through to "Untracked").
    */
   kind?: "comment" | "autopilot" | "chat" | "quick_create" | "direct";
+  /**
+   * Local working directory pinned for this task by the daemon. Empty until
+   * the daemon reports a work_dir (typically once execution starts).
+   */
+  work_dir?: string;
 }
 
 export interface Agent {
@@ -115,11 +131,24 @@ export interface Agent {
   max_concurrent_tasks: number;
   model: string;
   owner_id: string | null;
-  skills: Skill[];
+  skills: AgentSkillSummary[];
   created_at: string;
   updated_at: string;
   archived_at: string | null;
   archived_by: string | null;
+}
+
+/**
+ * Minimal skill shape embedded in an Agent payload (`GET /api/agents`,
+ * `GET /api/agents/:id`). Only id/name/description are populated — the
+ * agent list batch query joins exactly those three columns. For full skill
+ * info, use `GET /api/agents/:id/skills` (returns `SkillSummary[]`) or
+ * `GET /api/skills/:id` (returns the full `Skill`).
+ */
+export interface AgentSkillSummary {
+  id: string;
+  name: string;
+  description: string;
 }
 
 export interface CreateAgentRequest {
@@ -156,17 +185,28 @@ export interface UpdateAgentRequest {
 
 // Skills
 
-export interface Skill {
+/**
+ * Lightweight skill shape returned by list endpoints (`GET /api/skills`,
+ * `GET /api/agents/:id/skills`). The full SKILL.md `content` is intentionally
+ * omitted — bodies routinely run 50–200KB each and shipping them in list
+ * payloads tripped CLI timeouts on high-latency links (GH
+ * multica-ai/multica#2174). Use `Skill` from a detail endpoint when you need
+ * the body. For skills embedded in an `Agent` payload see `AgentSkillSummary`.
+ */
+export interface SkillSummary {
   id: string;
   workspace_id: string;
   name: string;
   description: string;
-  content: string;
   config: Record<string, unknown>;
-  files: SkillFile[];
   created_by: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface Skill extends SkillSummary {
+  content: string;
+  files: SkillFile[];
 }
 
 export interface SkillFile {
@@ -247,6 +287,44 @@ export interface RuntimeUsageByHour {
   cache_read_tokens: number;
   cache_write_tokens: number;
   task_count: number;
+}
+
+// One (date, model) bucket of token usage for the workspace dashboard.
+// Same shape as RuntimeUsage but workspace-scoped (no runtime_id, no
+// provider field on the wire) and optionally narrowed to a single project
+// on the server side. Cost stays client-side via the model pricing table.
+export interface DashboardUsageDaily {
+  date: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  task_count: number;
+}
+
+// Per-(agent, model) token totals for the workspace dashboard. Identical
+// wire shape to RuntimeUsageByAgent — the client folds by agent_id and
+// sums cost.
+export interface DashboardUsageByAgent {
+  agent_id: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  task_count: number;
+}
+
+// Per-agent total terminal-task run-time + counts. Powers the workspace
+// dashboard's "time by agent" list. failed_count is a subset of
+// task_count (failed tasks still contribute to total_seconds because
+// they consumed runtime to fail).
+export interface DashboardAgentRunTime {
+  agent_id: string;
+  total_seconds: number;
+  task_count: number;
+  failed_count: number;
 }
 
 export type RuntimeUpdateStatus =

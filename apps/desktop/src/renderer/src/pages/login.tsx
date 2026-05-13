@@ -2,20 +2,29 @@ import { LoginPage } from "@multica/views/auth";
 import { DragStrip } from "@multica/views/platform";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 
-const WEB_URL = import.meta.env.VITE_APP_URL || "http://localhost:3000";
+function requireRuntimeAppUrl(): string {
+  const runtimeConfig = window.desktopAPI.runtimeConfig;
+  if (!runtimeConfig.ok) {
+    throw new Error(
+      "Invariant violated: DesktopLoginPage rendered before App accepted runtime config",
+    );
+  }
+  return runtimeConfig.config.appUrl;
+}
 
 export function DesktopLoginPage() {
+  const webUrl = requireRuntimeAppUrl();
   const handleGoogleLogin = () => {
     // Open the hosted login page in the default browser. The callback page
     // will redirect back via multica:// deep link with the token.
     window.desktopAPI.openExternal(
-      `${WEB_URL}/login?platform=desktop&provider=google`,
+      `${webUrl}/login?platform=desktop&provider=google`,
     );
   };
 
   const handleFeishuLogin = () => {
     window.desktopAPI.openExternal(
-      `${WEB_URL}/login?platform=desktop&provider=feishu`,
+      `${webUrl}/login?platform=desktop&provider=feishu`,
     );
   };
 
