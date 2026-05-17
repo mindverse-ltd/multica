@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop selfhost-native-backend selfhost-native-frontend selfhost-native-bootstrap selfhost-native-check selfhost-native-stop selfhost-feishu-preflight selfhost-feishu-configure
+.PHONY: dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down selfhost selfhost-stop selfhost-native-backend selfhost-native-frontend selfhost-native-bootstrap selfhost-native-check selfhost-native-stop selfhost-feishu-preflight selfhost-feishu-configure
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -150,31 +150,31 @@ selfhost-stop: ## Stop the self-hosted Docker Compose stack
 	@echo "✓ All services stopped."
 
 # Host-native self-host helpers (no Docker Compose)
-selfhost-native-backend: ## Start backend directly on the host using ENV_FILE
+selfhost-native-backend:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-native-backend.sh "$(ENV_FILE)"
 
-selfhost-native-frontend: ## Start frontend directly on the host using ENV_FILE
+selfhost-native-frontend:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-native-frontend.sh "$(ENV_FILE)"
 
-selfhost-native-bootstrap: ## Bootstrap host-native self-host dependencies
+selfhost-native-bootstrap:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-native-bootstrap.sh
 
-selfhost-native-check: ## Check host-native self-host services
+selfhost-native-check:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-native-check.sh "$(ENV_FILE)"
 
-selfhost-native-stop: ## Stop host-native self-host services
+selfhost-native-stop:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-native-stop.sh "$(ENV_FILE)"
 
-selfhost-feishu-preflight: ## Validate Feishu self-host configuration
+selfhost-feishu-preflight:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-feishu-preflight.sh "$(ENV_FILE)"
 
-selfhost-feishu-configure: ## Write Feishu self-host configuration into ENV_FILE
+selfhost-feishu-configure:
 	$(REQUIRE_ENV)
 	@bash scripts/selfhost-feishu-configure.sh "$(ENV_FILE)" "$(FEISHU_APP_ID)" "$(FEISHU_APP_SECRET)" "$(FEISHU_REDIRECT_URI)" "$(NEXT_PUBLIC_FEISHU_APP_ID)"
 

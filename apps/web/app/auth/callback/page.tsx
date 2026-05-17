@@ -41,18 +41,30 @@ function CallbackContent() {
       const wsList = await api.listWorkspaces();
       qc.setQueryData(workspaceKeys.list(), wsList);
       const onboarded = loggedInUser.onboarded_at != null;
+
       const nextPart = searchParams
         .get("state")
         ?.split(",")
         .find((p) => p.startsWith("next:"));
-      const nextUrl = sanitizeNextUrl(
-        nextPart ? nextPart.slice(5) : null,
-      );
+      // Strip "next:" prefix, then drop anything that isn't a safe relative path
+      // so an attacker-controlled `state=next:https://evil` cannot redirect here.
+      const nextUrl = sanitizeNextUrl(nextPart ? nextPart.slice(5) : null);
+
+      // 1. nextUrl wins: a `next=/invite/<id>` always survives the OAuth
+      //    round-trip — the user clicked a specific link and we should
+      //    honor exactly that destination.
       if (nextUrl) {
         router.push(nextUrl);
         return;
       }
 
+      // 2. Un-onboarded users may have pending invitations on their
+      //    email even when no `next=` was carried (came from a fresh
+      //    login on app.multica.ai instead of clicking the email link,
+      //    or `state` was lost across the round-trip). Look them up by
+      //    email and route to the batch /invitations page if any.
+      //    Already-onboarded users skip this lookup — their new invites
+      //    surface in the sidebar dropdown, not as a forced wall.
       if (!onboarded) {
         try {
           const invites = await api.listMyInvitations();
@@ -62,10 +74,16 @@ function CallbackContent() {
             return;
           }
         } catch {
-          // fall through
+          // Network blip on the invite lookup is non-fatal — fall through
+          // to the normal post-auth destination so the user isn't stuck
+          // on a blank callback screen. Worst case they land on
+          // /onboarding and the sidebar will surface invites later.
         }
       }
 
+      // 3. Default: hand off to the resolver (onboarding for first-timers,
+      //    first workspace for returning users, /workspaces/new for
+      //    onboarded users with zero workspaces).
       router.push(resolvePostAuthDestination(wsList, onboarded));
     },
     [router, qc, searchParams],
@@ -76,7 +94,6 @@ function CallbackContent() {
       const response = await api.feishuLogin(code, redirectUri);
 
       if (isFeishuNeedsEmail(response)) {
-        // Feishu user has no email — needs email binding
         const params = new URLSearchParams({
           bind_email: response.session_token,
         });
@@ -86,7 +103,6 @@ function CallbackContent() {
         return;
       }
 
-      // Normal login — response is LoginResponse
       const { token, user } = response as LoginResponse;
       api.setToken(token);
       setUser(user);
@@ -118,7 +134,6 @@ function CallbackContent() {
     const redirectUri = `${window.location.origin}/auth/callback`;
 
     if (isDesktop) {
-      // Desktop flow: exchange code for token, then redirect via deep link.
       const exchangeToken =
         provider === "feishu"
           ? api.feishuLogin.bind(api)
@@ -138,18 +153,18 @@ function CallbackContent() {
       return;
     }
 
-    // Normal web flow.
     if (provider === "feishu") {
       handleFeishuLogin(code, redirectUri).catch((err) => {
         setError(err instanceof Error ? err.message : "Login failed");
       });
-    } else {
-      loginWithGoogle(code, redirectUri)
-        .then((loggedInUser) => postLogin(loggedInUser))
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : "Login failed");
-        });
+      return;
     }
+
+    loginWithGoogle(code, redirectUri)
+      .then((loggedInUser) => postLogin(loggedInUser))
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : "Login failed");
+      });
   }, [searchParams, loginWithGoogle, handleFeishuLogin, postLogin]);
 
   if (desktopToken) {

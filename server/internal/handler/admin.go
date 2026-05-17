@@ -17,13 +17,13 @@ const (
 )
 
 type AdminUserResponse struct {
-	ID                  string                     `json:"id"`
-	Name                string                     `json:"name"`
-	Email               string                     `json:"email"`
-	AvatarURL           *string                    `json:"avatar_url"`
-	OnboardedAt         *string                    `json:"onboarded_at"`
-	CreatedAt           string                     `json:"created_at"`
-	ExternalIdentities  []AdminExternalIdentityResp `json:"external_identities"`
+	ID                 string                      `json:"id"`
+	Name               string                      `json:"name"`
+	Email              string                      `json:"email"`
+	AvatarURL          *string                     `json:"avatar_url"`
+	OnboardedAt        *string                     `json:"onboarded_at"`
+	CreatedAt          string                      `json:"created_at"`
+	ExternalIdentities []AdminExternalIdentityResp `json:"external_identities"`
 }
 
 type AdminExternalIdentityResp struct {

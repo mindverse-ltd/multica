@@ -363,11 +363,17 @@ func discoverPiModels(ctx context.Context, executablePath string) ([]Model, erro
 	return parsePiModels(text), nil
 }
 
-// parsePiModels accepts the `pi --list-models` output. Pi historically
-// emitted `provider:model` per line and now emits a multi-column table
-// (`provider  model  context …`); both shapes are normalized to
-// `provider/model` to match opencode/UI conventions. The case-insensitive
-// `provider` token in column 0 is treated as the table header and skipped.
+// parsePiModels accepts the `pi --list-models` output and extracts
+// model IDs. Pi prints a tabular format to stderr:
+//
+//	provider  model              context  max-out  thinking  images
+//	openai    gpt-4o             128K     16.4K    no         yes
+//	doubao    glm-4.7            200K     131.1K   yes        no
+//
+// Each data row has provider as the first field and model as the second;
+// we combine them into "provider/model" for UI consistency with opencode.
+// A legacy "provider:model" single-field format is also accepted so the
+// parser stays backward-compatible if pi's output format changes.
 func parsePiModels(output string) []Model {
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -382,21 +388,23 @@ func parsePiModels(output string) []Model {
 		if len(fields) == 0 {
 			continue
 		}
-		first := fields[0]
-		if strings.EqualFold(first, "provider") {
+
+		// Skip the header row (first field is literally "provider").
+		if fields[0] == "provider" {
 			continue
 		}
+
 		var id string
-		if strings.ContainsAny(first, ":/") {
-			// Legacy `provider:model` format — normalize colon to slash.
-			// Restricted to this branch so a model name with a `:` in
-			// the table format's column 1 is not silently rewritten.
-			id = strings.Replace(first, ":", "/", 1)
-		} else if len(fields) >= 2 {
-			id = first + "/" + fields[1]
+		if len(fields) >= 2 {
+			// Tabular format: provider is field[0], model is field[1].
+			id = fields[0] + "/" + fields[1]
+		} else if strings.ContainsAny(fields[0], ":/") {
+			// Legacy single-field format: "provider:model".
+			id = strings.Replace(fields[0], ":", "/", 1)
 		} else {
 			continue
 		}
+
 		if seen[id] {
 			continue
 		}
@@ -831,10 +839,14 @@ func discoverOpenclawAgents(ctx context.Context, executablePath string) ([]Model
 }
 
 // openclawAgentEntry is the shape parseOpenclawAgentsJSON expects
-// from `openclaw agents list --json`. Both `name` and `id` are
-// accepted as the identifier (different openclaw versions ship
-// different field names); `model` is optional and only used to
-// enrich the dropdown label.
+// from `openclaw agents list --json`. `id` is the routing key
+// passed to `openclaw agent --agent <id>`; `name` is the human
+// display label set via `openclaw agents set-identity --name` and
+// is only used to enrich the dropdown label. The two are not
+// interchangeable — see openclawEntriesToModels for the mapping.
+// Older openclaw versions may emit only `name`; in that case we
+// fall back to using it as the id for backward compatibility.
+// `model` is optional and only used to enrich the dropdown label.
 type openclawAgentEntry struct {
 	Name  string `json:"name"`
 	ID    string `json:"id"`
@@ -870,19 +882,28 @@ func openclawEntriesToModels(entries []openclawAgentEntry) []Model {
 	models := make([]Model, 0, len(entries))
 	seen := map[string]bool{}
 	for _, e := range entries {
-		name := e.Name
-		if name == "" {
-			name = e.ID
+		// Use ID as the model identifier because openclaw resolves
+		// --agent by id, not by display name. Names may contain spaces
+		// (e.g. "Sub2API OPS") which openclaw's normalizeAgentId would
+		// mangle into a different string ("sub2api-ops"), causing a
+		// lookup miss and "no parseable output" errors.
+		id := e.ID
+		if id == "" {
+			id = e.Name
 		}
-		if name == "" || seen[name] {
+		if id == "" || seen[id] {
 			continue
 		}
-		seen[name] = true
-		label := name
-		if e.Model != "" {
-			label = name + " (" + e.Model + ")"
+		seen[id] = true
+		displayName := e.Name
+		if displayName == "" {
+			displayName = id
 		}
-		models = append(models, Model{ID: name, Label: label, Provider: "openclaw"})
+		label := displayName
+		if e.Model != "" {
+			label = displayName + " (" + e.Model + ")"
+		}
+		models = append(models, Model{ID: id, Label: label, Provider: "openclaw"})
 	}
 	return models
 }

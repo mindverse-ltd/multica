@@ -73,10 +73,10 @@ export function CliInstallInstructions({
         <p className="text-xs leading-[1.55] text-muted-foreground">
           {t(($) => $.cli_install.intro)}
         </p>
-        <Step n={1} label={t(($) => $.cli_install.step1_label)} cmd={INSTALL_CMD} />
+        <Step n={1} label="Install the Multica CLI" cmd={INSTALL_CMD} />
         <Step
           n={2}
-          label={t(($) => $.cli_install.step2_label)}
+          label="Configure, login, and start the daemon"
           cmd={setupCmd}
         />
       </CardContent>

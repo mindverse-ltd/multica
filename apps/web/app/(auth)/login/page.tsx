@@ -4,7 +4,6 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
-import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import {
   paths,
@@ -28,6 +27,7 @@ import Link from "next/link";
 import { LoginPage, validateCliCallback } from "@multica/views/auth";
 import { useT } from "@multica/views/i18n";
 
+const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 const feishuClientId = process.env.NEXT_PUBLIC_FEISHU_APP_ID;
 
 /**
@@ -60,7 +60,6 @@ function LoginPageContent() {
   const router = useRouter();
   const qc = useQueryClient();
   const { t } = useT("auth");
-  const googleClientId = useConfigStore((state) => state.googleClientId);
   const user = useAuthStore((s) => s.user);
   const isLoading = useAuthStore((s) => s.isLoading);
   const searchParams = useSearchParams();
@@ -192,15 +191,6 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
-      google={
-        googleClientId
-          ? {
-              clientId: googleClientId,
-              redirectUri: `${window.location.origin}/auth/callback`,
-              state: buildProviderState("google"),
-            }
-          : undefined
-      }
       feishu={
         feishuClientId
           ? {
@@ -226,19 +216,23 @@ function LoginPageContent() {
       }
       onTokenObtained={setLoggedInCookie}
       autoStartProvider={
-        provider === "google" || provider === "feishu" ? provider : undefined
+        provider === "feishu" ? provider : undefined
       }
       emailLogin={false}
       verificationCodeHint="当前测试环境默认验证码：888888"
       extra={
+        // Web-only nudge toward the desktop app. Copy is hardcoded EN
+        // for now because the login route sits outside the landing
+        // group's LocaleProvider — if this page ever becomes
+        // locale-aware, the strings live in positioning doc §3.3.
         <span className="text-xs text-muted-foreground">
-          {t(($) => $.web.prefer_desktop)}{" "}
+          Prefer the desktop app?{" "}
           <Link
             href="/download"
             onClick={() => captureDownloadIntent("login")}
             className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground/70"
           >
-            {t(($) => $.web.download)}
+            Download
           </Link>
         </span>
       }

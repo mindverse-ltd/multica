@@ -2,6 +2,7 @@ import type {
   Issue,
   CreateIssueRequest,
   UpdateIssueRequest,
+  GroupedIssuesResponse,
   ListIssuesResponse,
   SearchIssuesResponse,
   SearchProjectsResponse,
@@ -9,8 +10,13 @@ import type {
   CreateMemberRequest,
   UpdateMemberRequest,
   ListIssuesParams,
+  ListGroupedIssuesParams,
   Agent,
   CreateAgentRequest,
+  AgentTemplate,
+  AgentTemplateSummary,
+  CreateAgentFromTemplateRequest,
+  CreateAgentFromTemplateResponse,
   UpdateAgentRequest,
   AgentTask,
   AgentActivityBucket,
@@ -41,6 +47,7 @@ import type {
   DashboardUsageDaily,
   DashboardUsageByAgent,
   DashboardAgentRunTime,
+  DashboardRunTimeDaily,
   RuntimeUpdate,
   RuntimeModelListRequest,
   RuntimeLocalSkillListRequest,
@@ -87,6 +94,8 @@ import type {
   GitHubPullRequest,
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
+  Squad,
+  SquadMember,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import { type Logger, noopLogger } from "../logger";
@@ -94,15 +103,24 @@ import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
+  AgentTemplateSchema,
+  AgentTemplateSummaryListSchema,
   AttachmentResponseSchema,
   ChildIssuesResponseSchema,
   CommentsListSchema,
+  CreateAgentFromTemplateResponseSchema,
   DashboardAgentRunTimeListSchema,
+  DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  EMPTY_AGENT_TEMPLATE_DETAIL,
+  EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_ATTACHMENT,
+  EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
+  EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
+  GroupedIssuesResponseSchema,
   ListIssuesResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
@@ -205,6 +223,27 @@ export class ApiError extends Error {
   }
 }
 
+// Thrown by getAttachmentTextContent when the server refuses to inline a
+// file because it exceeds the 2 MB cap. UI maps to a "too large, please
+// download" affordance with the Download CTA still available.
+export class PreviewTooLargeError extends Error {
+  constructor() {
+    super("attachment too large for inline preview");
+    this.name = "PreviewTooLargeError";
+  }
+}
+
+// Thrown by getAttachmentTextContent when the server's text whitelist
+// rejects the content type. Normally the client's isPreviewable() guard
+// catches this earlier, but the two whitelists can drift — surfacing the
+// 415 as a typed error makes the drift visible.
+export class PreviewUnsupportedError extends Error {
+  constructor() {
+    super("attachment type not supported for inline preview");
+    this.name = "PreviewUnsupportedError";
+  }
+}
+
 export class ApiClient {
   private baseUrl: string;
   private token: string | null = null;
@@ -279,15 +318,23 @@ export class ApiClient {
     }
   }
 
-  private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
+  // Sends the request with the standard headers (auth, CSRF, request id,
+  // client identity) and runs the shared error path (401 → handleUnauthorized,
+  // structured ApiError, status-aware log level). Returns the raw Response so
+  // callers can decide how to decode the body — JSON for the typed `fetch<T>`
+  // path, plain text for the attachment-preview proxy, etc.
+  private async fetchRaw(
+    path: string,
+    init?: RequestInit & { extraHeaders?: Record<string, string> },
+  ): Promise<Response> {
     const rid = createRequestId();
     const start = Date.now();
     const method = init?.method ?? "GET";
 
     const headers: Record<string, string> = {
-      "Content-Type": "application/json",
       "X-Request-ID": rid,
       ...this.authHeaders(),
+      ...(init?.extraHeaders ?? {}),
       ...((init?.headers as Record<string, string>) ?? {}),
     };
 
@@ -308,12 +355,18 @@ export class ApiClient {
     }
 
     this.logger.info(`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms` });
+    return res;
+  }
 
+  private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
+    const res = await this.fetchRaw(path, {
+      ...init,
+      extraHeaders: { "Content-Type": "application/json" },
+    });
     // Handle 204 No Content
     if (res.status === 204) {
       return undefined as T;
     }
-
     return res.json() as Promise<T>;
   }
 
@@ -457,6 +510,36 @@ export class ApiClient {
     });
   }
 
+  async listGroupedIssues(params: ListGroupedIssuesParams): Promise<GroupedIssuesResponse> {
+    const search = new URLSearchParams({ group_by: params.group_by });
+    if (params.limit) search.set("limit", String(params.limit));
+    if (params.offset) search.set("offset", String(params.offset));
+    if (params.workspace_id) search.set("workspace_id", params.workspace_id);
+    if (params.statuses?.length) search.set("statuses", params.statuses.join(","));
+    if (params.priorities?.length) search.set("priorities", params.priorities.join(","));
+    if (params.assignee_types?.length) search.set("assignee_types", params.assignee_types.join(","));
+    if (params.assignee_id) search.set("assignee_id", params.assignee_id);
+    if (params.assignee_ids?.length) search.set("assignee_ids", params.assignee_ids.join(","));
+    if (params.creator_id) search.set("creator_id", params.creator_id);
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.assignee_filters?.length) {
+      search.set("assignee_filters", params.assignee_filters.map((f) => `${f.type}:${f.id}`).join(","));
+    }
+    if (params.include_no_assignee) search.set("include_no_assignee", "true");
+    if (params.creator_filters?.length) {
+      search.set("creator_filters", params.creator_filters.map((f) => `${f.type}:${f.id}`).join(","));
+    }
+    if (params.project_ids?.length) search.set("project_ids", params.project_ids.join(","));
+    if (params.include_no_project) search.set("include_no_project", "true");
+    if (params.label_ids?.length) search.set("label_ids", params.label_ids.join(","));
+    if (params.group_assignee_type) search.set("group_assignee_type", params.group_assignee_type);
+    if (params.group_assignee_id) search.set("group_assignee_id", params.group_assignee_id);
+    const raw = await this.fetch<unknown>(`/api/issues/grouped?${search}`);
+    return parseWithFallback(raw, GroupedIssuesResponseSchema, EMPTY_GROUPED_ISSUES_RESPONSE, {
+      endpoint: "GET /api/issues/grouped",
+    });
+  }
+
   async searchIssues(params: { q: string; limit?: number; offset?: number; include_closed?: boolean; signal?: AbortSignal }): Promise<SearchIssuesResponse> {
     const search = new URLSearchParams({ q: params.q });
     if (params.limit !== undefined) search.set("limit", String(params.limit));
@@ -484,7 +567,12 @@ export class ApiClient {
     });
   }
 
-  async quickCreateIssue(data: { agent_id: string; prompt: string; project_id?: string | null }): Promise<{ task_id: string }> {
+  async quickCreateIssue(data: {
+    agent_id?: string;
+    squad_id?: string;
+    prompt: string;
+    project_id?: string | null;
+  }): Promise<{ task_id: string }> {
     return this.fetch("/api/issues/quick-create", {
       method: "POST",
       body: JSON.stringify(data),
@@ -571,10 +659,10 @@ export class ApiClient {
     return this.fetch("/api/assignee-frequency");
   }
 
-  async updateComment(commentId: string, content: string): Promise<Comment> {
+  async updateComment(commentId: string, content: string, attachmentIds?: string[]): Promise<Comment> {
     return this.fetch(`/api/comments/${commentId}`, {
       method: "PUT",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, attachment_ids: attachmentIds }),
     });
   }
 
@@ -663,6 +751,51 @@ export class ApiClient {
       method: "POST",
       body: JSON.stringify(data),
     });
+  }
+
+  async listAgentTemplates(): Promise<AgentTemplateSummary[]> {
+    const raw = await this.fetch<unknown>("/api/agent-templates");
+    return parseWithFallback(
+      raw,
+      AgentTemplateSummaryListSchema,
+      EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
+      { endpoint: "GET /api/agent-templates" },
+    );
+  }
+
+  async getAgentTemplate(slug: string): Promise<AgentTemplate> {
+    const raw = await this.fetch<unknown>(
+      `/api/agent-templates/${encodeURIComponent(slug)}`,
+    );
+    // Round-trip the requested slug into the fallback so a malformed
+    // detail response still produces a navigable record matching the URL
+    // the user clicked.
+    return parseWithFallback(
+      raw,
+      AgentTemplateSchema,
+      { ...EMPTY_AGENT_TEMPLATE_DETAIL, slug },
+      { endpoint: "GET /api/agent-templates/:slug" },
+    );
+  }
+
+  /** Creates an agent from a curated template. The server fetches every
+   *  referenced skill URL in parallel, materializes them into the workspace
+   *  (find-or-create by name), and writes the agent + skill bindings in a
+   *  single transaction. On any upstream fetch failure, the entire write is
+   *  rolled back and the API returns 422 with `failed_urls`. */
+  async createAgentFromTemplate(
+    data: CreateAgentFromTemplateRequest,
+  ): Promise<CreateAgentFromTemplateResponse> {
+    const raw = await this.fetch<unknown>("/api/agents/from-template", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      CreateAgentFromTemplateResponseSchema,
+      EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
+      { endpoint: "POST /api/agents/from-template" },
+    );
   }
 
   async updateAgent(id: string, data: UpdateAgentRequest): Promise<Agent> {
@@ -786,6 +919,21 @@ export class ApiClient {
       DashboardAgentRunTimeListSchema,
       [],
       { endpoint: "GET /api/dashboard/agent-runtime" },
+    );
+  }
+
+  async getDashboardRunTimeDaily(
+    params: { days?: number; project_id?: string | null },
+  ): Promise<DashboardRunTimeDaily[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    const raw = await this.fetch<unknown>(`/api/dashboard/runtime/daily?${search}`);
+    return parseWithFallback<DashboardRunTimeDaily[]>(
+      raw,
+      DashboardRunTimeDailyListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/runtime/daily" },
     );
   }
 
@@ -1169,6 +1317,13 @@ export class ApiClient {
     await this.fetch(`/api/chat/sessions/${id}`, { method: "DELETE" });
   }
 
+  async updateChatSession(id: string, data: { title: string }): Promise<ChatSession> {
+    return this.fetch(`/api/chat/sessions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
   async listChatMessages(sessionId: string): Promise<ChatMessage[]> {
     return this.fetch(`/api/chat/sessions/${sessionId}/messages`);
   }
@@ -1221,6 +1376,38 @@ export class ApiClient {
 
   async deleteAttachment(id: string): Promise<void> {
     await this.fetch(`/api/attachments/${id}`, { method: "DELETE" });
+  }
+
+  // Fetches the raw bytes of a text-previewable attachment.
+  //
+  // The endpoint sidesteps CloudFront CORS (not configured on the CDN) and
+  // bypasses Content-Disposition: attachment for the `text/*` family, both
+  // of which would otherwise prevent the renderer from getting the body.
+  // The server always replies with `text/plain; charset=utf-8` for safety;
+  // the original MIME ships back in the `X-Original-Content-Type` header so
+  // the preview dispatcher can choose between markdown / html / plain code.
+  //
+  // Routes through `fetchRaw` so it inherits the standard auth headers,
+  // 401 → handleUnauthorized recovery, request-id logging, and ApiError
+  // shape. 413 / 415 are translated to typed `Preview*Error` instances so
+  // the modal can render specific fallbacks instead of generic failure.
+  async getAttachmentTextContent(
+    id: string,
+  ): Promise<{ text: string; originalContentType: string }> {
+    let res: Response;
+    try {
+      res = await this.fetchRaw(`/api/attachments/${id}/content`);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.status === 413) throw new PreviewTooLargeError();
+        if (err.status === 415) throw new PreviewUnsupportedError();
+      }
+      throw err;
+    }
+    return {
+      text: await res.text(),
+      originalContentType: res.headers.get("X-Original-Content-Type") ?? "",
+    };
   }
 
   // Projects
@@ -1343,6 +1530,43 @@ export class ApiClient {
       method: "PUT",
       body: JSON.stringify(data),
     });
+  }
+
+  // Squads
+  async listSquads(): Promise<Squad[]> {
+    return this.fetch(`/api/squads`);
+  }
+
+  async getSquad(id: string): Promise<Squad> {
+    return this.fetch(`/api/squads/${id}`);
+  }
+
+  async createSquad(data: { name: string; description?: string; leader_id: string; avatar_url?: string }): Promise<Squad> {
+    return this.fetch("/api/squads", { method: "POST", body: JSON.stringify(data) });
+  }
+
+  async updateSquad(id: string, data: { name?: string; description?: string; instructions?: string; leader_id?: string; avatar_url?: string }): Promise<Squad> {
+    return this.fetch(`/api/squads/${id}`, { method: "PUT", body: JSON.stringify(data) });
+  }
+
+  async deleteSquad(id: string): Promise<void> {
+    await this.fetch(`/api/squads/${id}`, { method: "DELETE" });
+  }
+
+  async listSquadMembers(squadId: string): Promise<SquadMember[]> {
+    return this.fetch(`/api/squads/${squadId}/members`);
+  }
+
+  async addSquadMember(squadId: string, data: { member_type: string; member_id: string; role?: string }): Promise<SquadMember> {
+    return this.fetch(`/api/squads/${squadId}/members`, { method: "POST", body: JSON.stringify(data) });
+  }
+
+  async removeSquadMember(squadId: string, data: { member_type: string; member_id: string }): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/members`, { method: "DELETE", body: JSON.stringify(data) });
+  }
+
+  async updateSquadMemberRole(squadId: string, data: { member_type: string; member_id: string; role: string }): Promise<SquadMember> {
+    return this.fetch(`/api/squads/${squadId}/members/role`, { method: "PATCH", body: JSON.stringify(data) });
   }
 
   // Autopilots

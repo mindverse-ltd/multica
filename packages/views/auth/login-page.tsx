@@ -753,7 +753,7 @@ export function LoginPage({
                     <rect x="3" y="4" width="18" height="16" rx="4" fill="#00C45A" />
                     <path d="M8 9.5h8M8 13h5" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
                   </svg>
-                  {t(($) => $.signin.feishu)}
+                  Continue with Feishu
                 </Button>
               )}
               {(google || onGoogleLogin) && (
@@ -783,7 +783,7 @@ export function LoginPage({
                       fill="#EA4335"
                     />
                   </svg>
-                {t(($) => $.signin.google)}
+                  Continue with Google
                 </Button>
               )}
             </>

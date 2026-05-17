@@ -2,8 +2,13 @@ import type {
   DashboardUsageDaily,
   DashboardUsageByAgent,
   DashboardAgentRunTime,
+  DashboardRunTimeDaily,
 } from "@multica/core/types";
-import { estimateCost, estimateCostBreakdown } from "../runtimes/utils";
+import { estimateCost, estimateCostBreakdown, type DailyTokenData } from "../runtimes/utils";
+import type {
+  DailyTimeData,
+  DailyTasksData,
+} from "../runtimes/components/charts";
 
 // ---------------------------------------------------------------------------
 // Dashboard data aggregations
@@ -64,6 +69,42 @@ export function aggregateDailyCost(usage: DashboardUsageDaily[]): DailyCostStack
         total: round(input + output + cacheWrite),
       };
     });
+}
+
+// Per-(date, model) rows → 1 row per date with raw token counts split
+// across the four chart segments. Independent of pricing — unmapped
+// models still contribute here, even if they're excluded from cost.
+// Mirrors `aggregateByDate(...).dailyTokens` from the runtimes utils so
+// the Tokens chart on the Usage page consumes the same shape as the one
+// on the runtime-detail page.
+export function aggregateDailyTokens(usage: DashboardUsageDaily[]): DailyTokenData[] {
+  const map = new Map<
+    string,
+    { input: number; output: number; cacheRead: number; cacheWrite: number }
+  >();
+  for (const u of usage) {
+    const entry = map.get(u.date) ?? {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+    };
+    entry.input += u.input_tokens;
+    entry.output += u.output_tokens;
+    entry.cacheRead += u.cache_read_tokens;
+    entry.cacheWrite += u.cache_write_tokens;
+    map.set(u.date, entry);
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, t]) => ({
+      date,
+      label: formatDateLabel(date),
+      input: t.input,
+      output: t.output,
+      cacheRead: t.cacheRead,
+      cacheWrite: t.cacheWrite,
+    }));
 }
 
 export interface DashboardTokenTotals {
@@ -174,6 +215,37 @@ export function mergeAgentDashboardRows(
     if (b.cost !== a.cost) return b.cost - a.cost;
     return b.seconds - a.seconds;
   });
+}
+
+// Per-date run-time rows → one row per date with `totalSeconds` for the
+// DailyTimeChart. Sorted ascending so the x-axis reads oldest-to-newest,
+// matching the cost / tokens aggregators.
+export function aggregateDailyTime(rows: DashboardRunTimeDaily[]): DailyTimeData[] {
+  return [...rows]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((r) => ({
+      date: r.date,
+      label: formatDateLabel(r.date),
+      totalSeconds: r.total_seconds,
+    }));
+}
+
+// Per-date run-time rows → one row per date with `completed` and `failed`
+// counts for the DailyTasksChart's stacked bar (failed_count is a subset
+// of task_count, so completed = task_count - failed_count).
+export function aggregateDailyTasks(rows: DashboardRunTimeDaily[]): DailyTasksData[] {
+  return [...rows]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .map((r) => {
+      const failed = r.failed_count;
+      const completed = Math.max(0, r.task_count - failed);
+      return {
+        date: r.date,
+        label: formatDateLabel(r.date),
+        completed,
+        failed,
+      };
+    });
 }
 
 // Compact human duration: "1h 23m" / "12m 30s" / "45s" / "<1m". Used for
