@@ -16,6 +16,13 @@ INSERT INTO member (workspace_id, user_id, role)
 VALUES ($1, $2, $3)
 RETURNING *;
 
+-- name: CreateMemberIfNotExists :one
+INSERT INTO member (workspace_id, user_id, role)
+VALUES ($1, $2, $3)
+ON CONFLICT (workspace_id, user_id) DO UPDATE
+SET role = member.role
+RETURNING *;
+
 -- name: UpdateMemberRole :one
 UPDATE member SET role = $2
 WHERE id = $1
