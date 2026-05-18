@@ -93,9 +93,9 @@ describe("StepPlatformFork", () => {
 
   it("renders the three fork options at rest", () => {
     renderFork();
-    expect(screen.getByText(/download the desktop app/i)).toBeInTheDocument();
     expect(screen.getByText(/^install the cli$/i)).toBeInTheDocument();
     expect(screen.getByText(/^cloud runtime$/i)).toBeInTheDocument();
+    expect(screen.queryByText(/download the desktop app/i)).not.toBeInTheDocument();
     // Dialogs closed at rest → no CLI instructions, no email field.
     expect(screen.queryByTestId("cli-instructions")).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument();
@@ -112,7 +112,7 @@ describe("StepPlatformFork", () => {
       screen.queryByRole("button", { name: /^continue$/i }),
     ).not.toBeInTheDocument();
     expect(
-      screen.getByText(/pick a path above — or skip and configure/i),
+      screen.getByText(/install the cli above — or skip and configure/i),
     ).toBeInTheDocument();
   });
 
@@ -122,25 +122,6 @@ describe("StepPlatformFork", () => {
     await user.click(screen.getByRole("button", { name: /skip for now/i }));
     expect(onNext).toHaveBeenCalledTimes(1);
     expect(onNext).toHaveBeenCalledWith(null);
-  });
-
-  it("opens the download page and flips the card to a post-click state", async () => {
-    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
-    const user = userEvent.setup();
-    renderFork();
-
-    await user.click(screen.getByText(/download the desktop app/i));
-
-    // Routes to the new /download page (not GitHub releases) so the
-    // user lands on the OS auto-detect surface.
-    expect(openSpy).toHaveBeenCalledWith(
-      "/download",
-      "_blank",
-      "noopener,noreferrer",
-    );
-    expect(
-      screen.getByText(/continuing on the download page/i),
-    ).toBeInTheDocument();
   });
 
   it("CLI dialog: opens with instructions + 'waiting' and a disabled Connect button", async () => {
