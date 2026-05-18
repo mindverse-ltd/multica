@@ -98,6 +98,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
 
   return (
     <div className="flex flex-1 min-h-0 flex-col">
+      {/* Desktop settings already has a side-nav title, so only mobile needs PageHeader. */}
       <PageHeader className="md:hidden">
         <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
       </PageHeader>
