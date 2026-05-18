@@ -344,6 +344,10 @@ func (h *Handler) resolveFeishuUser(r *http.Request, profile feishuUserInfoRespo
 		return db.User{}, err
 	}
 
+	if err := addUserToDefaultWorkspace(r.Context(), qtx, user); err != nil {
+		return db.User{}, err
+	}
+
 	_, err = qtx.CreateExternalIdentity(r.Context(), db.CreateExternalIdentityParams{
 		UserID:         user.ID,
 		Provider:       feishuProvider,
@@ -546,6 +550,11 @@ func (h *Handler) FeishuBindEmail(w http.ResponseWriter, r *http.Request) {
 		} else {
 			writeError(w, http.StatusInternalServerError, "failed to create user")
 		}
+		return
+	}
+
+	if err := addUserToDefaultWorkspace(r.Context(), qtx, user); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add user to default workspace")
 		return
 	}
 

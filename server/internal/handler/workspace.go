@@ -201,6 +201,11 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := addUserToDefaultWorkspace(r.Context(), qtx, db.User{ID: parseUUID(userID)}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add default workspace")
+		return
+	}
+
 	// Becoming a workspace member is the physical event that "completes" onboarding —
 	// keep this atomic with CreateMember so `member` and `onboarded_at`
 	// can never disagree. COALESCE in MarkUserOnboarded keeps it idempotent.

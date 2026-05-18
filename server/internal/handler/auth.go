@@ -220,7 +220,11 @@ func addUserToDefaultWorkspace(ctx context.Context, q *db.Queries, user db.User)
 		UserID:      user.ID,
 		Role:        "member",
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // signupSourceFromRequest reads the attribution cookie the web frontend
