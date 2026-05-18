@@ -2296,9 +2296,20 @@ func TestVerifyCodeNewUserJoinsDefaultWorkspace(t *testing.T) {
 		t.Fatalf("VerifyCode: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
+	var resp LoginResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode LoginResponse: %v", err)
+	}
+	if resp.User.OnboardedAt == nil {
+		t.Fatal("VerifyCode response: expected onboarded_at to be set for default workspace member")
+	}
+
 	user, err := testHandler.Queries.GetUserByEmail(ctx, email)
 	if err != nil {
 		t.Fatalf("GetUserByEmail: %v", err)
+	}
+	if !user.OnboardedAt.Valid {
+		t.Fatal("GetUserByEmail: expected onboarded_at to be set for default workspace member")
 	}
 
 	workspaces, err := testHandler.Queries.ListWorkspaces(ctx, user.ID)

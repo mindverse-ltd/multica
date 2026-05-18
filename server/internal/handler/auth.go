@@ -220,6 +220,11 @@ func addUserToDefaultWorkspace(ctx context.Context, q *db.Queries, user db.User)
 		UserID:      user.ID,
 		Role:        "member",
 	})
+	if err != nil {
+		return err
+	}
+
+	_, err = q.MarkUserOnboarded(ctx, user.ID)
 	return err
 }
 
