@@ -2,6 +2,9 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
 
+# The multica-backend target assumes METRICS_ADDR uses port 9090 in
+# docker-compose.obs.yml. If METRICS_ADDR changes, update backend:9090 below.
+
 rule_files:
   - /etc/prometheus/rules/*.yml
 

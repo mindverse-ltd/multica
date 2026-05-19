@@ -10,6 +10,9 @@
 # Prometheus:   http://127.0.0.1:${PROMETHEUS_PORT:-9090}
 # Alertmanager: http://127.0.0.1:${ALERTMANAGER_PORT:-9093}
 # Tempo:        http://127.0.0.1:${TEMPO_PORT:-3200}
+#
+# Production deployments should set GRAFANA_ADMIN_PASSWORD in .env before
+# exposing Grafana through a reverse proxy or SSH tunnel.
 
 name: multica
 
@@ -20,7 +23,8 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-multica-backend}
       OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-service.namespace=multica,deployment.environment=production}
-      OTEL_TRACES_SAMPLER_RATIO: ${OTEL_TRACES_SAMPLER_RATIO:-0.10}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.10}
     expose:
       - "9090"
 
@@ -87,7 +91,7 @@ services:
       - tempo
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Please set GRAFANA_ADMIN_PASSWORD in .env}
       GF_USERS_ALLOW_SIGN_UP: "false"
     ports:
       - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"

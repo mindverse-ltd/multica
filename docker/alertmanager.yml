@@ -11,4 +11,6 @@ route:
   repeat_interval: 4h
 
 receivers:
+  # Placeholder receiver. Configure webhook/email/chat integration before
+  # relying on Alertmanager for production notifications.
   - name: default
