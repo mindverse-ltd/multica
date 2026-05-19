@@ -1,0 +1,107 @@
+# Observability overlay for self-hosted Multica.
+#
+# Usage:
+#   METRICS_ADDR=0.0.0.0:9090 docker compose \
+#     -f docker-compose.selfhost.yml \
+#     -f docker-compose.obs.yml \
+#     up -d
+#
+# Grafana:      http://127.0.0.1:${GRAFANA_PORT:-3001}
+# Prometheus:   http://127.0.0.1:${PROMETHEUS_PORT:-9090}
+# Alertmanager: http://127.0.0.1:${ALERTMANAGER_PORT:-9093}
+# Tempo:        http://127.0.0.1:${TEMPO_PORT:-3200}
+#
+# Production deployments should set GRAFANA_ADMIN_PASSWORD in .env before
+# exposing Grafana through a reverse proxy or SSH tunnel.
+
+name: multica
+
+services:
+  backend:
+    environment:
+      METRICS_ADDR: ${METRICS_ADDR:-0.0.0.0:9090}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-otel-collector:4317}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-multica-backend}
+      OTEL_RESOURCE_ATTRIBUTES: ${OTEL_RESOURCE_ATTRIBUTES:-service.namespace=multica,deployment.environment=production}
+      OTEL_TRACES_SAMPLER: ${OTEL_TRACES_SAMPLER:-parentbased_traceidratio}
+      OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-0.10}
+    expose:
+      - "9090"
+
+  prometheus:
+    image: prom/prometheus:v3.3.0
+    depends_on:
+      - backend
+      - alertmanager
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus_data:/prometheus
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    ports:
+      - "127.0.0.1:${ALERTMANAGER_PORT:-9093}:9093"
+    volumes:
+      - ./docker/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.126.0
+    command:
+      - --config=/etc/otelcol-contrib/otel-collector.yml
+    depends_on:
+      - tempo
+    ports:
+      - "127.0.0.1:${OTEL_COLLECTOR_GRPC_PORT:-4317}:4317"
+      - "127.0.0.1:${OTEL_COLLECTOR_HTTP_PORT:-4318}:4318"
+    volumes:
+      - ./docker/otel-collector.yml:/etc/otelcol-contrib/otel-collector.yml:ro
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.8.1
+    command:
+      - -config.file=/etc/tempo/tempo.yml
+    ports:
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
+    volumes:
+      - ./docker/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempo_data:/var/tempo
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.6.1
+    depends_on:
+      - prometheus
+      - tempo
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Please set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - ./docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
+
+volumes:
+  prometheus_data:
+  alertmanager_data:
+  tempo_data:
+  grafana_data:
