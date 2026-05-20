@@ -103,8 +103,13 @@ services:
       - --server.http.listen-addr=0.0.0.0:12345
       - --storage.path=/var/lib/alloy/data
       - /etc/alloy/config.alloy
+    # alloy must start after every container it might collect logs from,
+    # otherwise discovery.docker caches a snapshot that goes stale the moment
+    # a later-starting service is (re)created — alloy then keeps polling dead
+    # container IDs until the next discovery refresh (60s default).
     depends_on:
       - loki
+      - grafana
     volumes:
       - ./docker/alloy.alloy:/etc/alloy/config.alloy:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
