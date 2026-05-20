@@ -21,12 +21,16 @@ type cursorBackend struct {
 }
 
 func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	runTrace := startRunSpan(ctx, "cursor", opts)
+	ctx = runTrace.Context()
+
 	execName := b.cfg.ExecutablePath
 	if execName == "" {
 		execName = "cursor-agent"
 	}
 	lookedUp, err := exec.LookPath(execName)
 	if err != nil {
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("cursor-agent executable not found at %q: %w", execName, err)
 	}
 
@@ -51,12 +55,14 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("cursor stdout pipe: %w", err)
 	}
 	cmd.Stderr = newLogWriter(b.cfg.Logger, "[cursor:stderr] ")
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("start cursor-agent: %w", err)
 	}
 
@@ -134,6 +140,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					CallID: evt.ToolID,
 					Input:  params,
 				})
+				runTrace.RecordToolUse(evt.ToolName, evt.ToolID)
 
 			case "tool_result":
 				trySend(msgCh, Message{
@@ -141,6 +148,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					CallID: evt.ToolID,
 					Output: evt.Output,
 				})
+				runTrace.RecordToolResult(evt.ToolID, len(evt.Output))
 
 			case "result":
 				if evt.IsError || evt.Subtype == "error" {
@@ -194,6 +202,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		if !hasResultUsage {
 			resultUsage = stepUsage
 		}
+		runTrace.RecordUsageMap(resultUsage)
 
 		exitErr := cmd.Wait()
 		duration := time.Since(startTime)
@@ -210,6 +219,7 @@ func (b *cursorBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		}
 
 		b.cfg.Logger.Info("cursor-agent finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
+		runTrace.Finish(finalStatus, finalError)
 
 		resCh <- Result{
 			Status:     finalStatus,

@@ -2404,6 +2404,12 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	execOpts := agent.ExecOptions{
 		Cwd:                       env.WorkDir,
 		Model:                     model,
+		RunID:                     task.ID,
+		IssueID:                   task.IssueID,
+		IssueIdentifier:           task.IssueIdentifier,
+		WorkspaceID:               task.WorkspaceID,
+		AgentID:                   task.AgentID,
+		AgentName:                 agentName,
 		Timeout:                   d.cfg.AgentTimeout,
 		SemanticInactivityTimeout: d.cfg.CodexSemanticInactivityTimeout,
 		ResumeSessionID:           task.PriorSessionID,

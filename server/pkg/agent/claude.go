@@ -21,11 +21,15 @@ type claudeBackend struct {
 }
 
 func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	runTrace := startRunSpan(ctx, "claude", opts)
+	ctx = runTrace.Context()
+
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "claude"
 	}
 	if _, err := exec.LookPath(execPath); err != nil {
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("claude executable not found at %q: %w", execPath, err)
 	}
 
@@ -46,6 +50,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		path, err := writeMcpConfigToTemp(opts.McpConfig)
 		if err != nil {
 			cancel()
+			runTrace.Finish("failed", err.Error())
 			return nil, err
 		}
 		mcpConfigPath = path
@@ -71,11 +76,13 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("claude stdout pipe: %w", err)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("claude stdin pipe: %w", err)
 	}
 	closeStdin := func() {
@@ -95,6 +102,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	if err := cmd.Start(); err != nil {
 		closeStdin()
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("start claude: %w", err)
 	}
 	if err := writeClaudeInput(stdin, prompt); err != nil {
@@ -107,7 +115,9 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		closeStdin()
 		cancel()
 		_ = cmd.Wait()
-		return nil, errors.New(withAgentStderr(fmt.Sprintf("write claude input: %v", err), "claude", stderrBuf.Tail()))
+		err = errors.New(withAgentStderr(fmt.Sprintf("write claude input: %v", err), "claude", stderrBuf.Tail()))
+		runTrace.Finish("failed", err.Error())
+		return nil, err
 	}
 	closeStdin()
 
@@ -156,9 +166,9 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 			switch msg.Type {
 			case "assistant":
-				b.handleAssistant(msg, msgCh, &output, usage)
+				b.handleAssistant(msg, msgCh, &output, usage, runTrace)
 			case "user":
-				b.handleUser(msg, msgCh)
+				b.handleUser(msg, msgCh, runTrace)
 			case "system":
 				if msg.SessionID != "" {
 					sessionID = msg.SessionID
@@ -211,6 +221,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		}
 
 		b.cfg.Logger.Info("claude finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
+		runTrace.Finish(finalStatus, finalError)
 
 		reportedSessionID := resolveSessionID(opts.ResumeSessionID, sessionID, finalStatus == "failed")
 		if reportedSessionID != sessionID {
@@ -233,20 +244,33 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	return &Session{Messages: msgCh, Result: resCh}, nil
 }
 
-func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message, output *strings.Builder, usage map[string]TokenUsage) {
+func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message, output *strings.Builder, usage map[string]TokenUsage, traces ...*agentRunTrace) {
 	var content claudeMessageContent
 	if err := json.Unmarshal(msg.Message, &content); err != nil {
 		return
 	}
+	var runTrace *agentRunTrace
+	if len(traces) > 0 {
+		runTrace = traces[0]
+	}
 
 	// Accumulate token usage per model.
 	if content.Usage != nil && content.Model != "" {
+		turnUsage := TokenUsage{
+			InputTokens:      content.Usage.InputTokens,
+			OutputTokens:     content.Usage.OutputTokens,
+			CacheReadTokens:  content.Usage.CacheReadInputTokens,
+			CacheWriteTokens: content.Usage.CacheCreationInputTokens,
+		}
 		u := usage[content.Model]
-		u.InputTokens += content.Usage.InputTokens
-		u.OutputTokens += content.Usage.OutputTokens
-		u.CacheReadTokens += content.Usage.CacheReadInputTokens
-		u.CacheWriteTokens += content.Usage.CacheCreationInputTokens
+		u.InputTokens += turnUsage.InputTokens
+		u.OutputTokens += turnUsage.OutputTokens
+		u.CacheReadTokens += turnUsage.CacheReadTokens
+		u.CacheWriteTokens += turnUsage.CacheWriteTokens
 		usage[content.Model] = u
+		if runTrace != nil {
+			runTrace.RecordAssistantTurn(content.Model, turnUsage, content.StopReason)
+		}
 	}
 
 	for _, block := range content.Content {
@@ -271,14 +295,21 @@ func (b *claudeBackend) handleAssistant(msg claudeSDKMessage, ch chan<- Message,
 				CallID: block.ID,
 				Input:  input,
 			})
+			if runTrace != nil {
+				runTrace.RecordToolUse(block.Name, block.ID)
+			}
 		}
 	}
 }
 
-func (b *claudeBackend) handleUser(msg claudeSDKMessage, ch chan<- Message) {
+func (b *claudeBackend) handleUser(msg claudeSDKMessage, ch chan<- Message, traces ...*agentRunTrace) {
 	var content claudeMessageContent
 	if err := json.Unmarshal(msg.Message, &content); err != nil {
 		return
+	}
+	var runTrace *agentRunTrace
+	if len(traces) > 0 {
+		runTrace = traces[0]
 	}
 
 	for _, block := range content.Content {
@@ -292,6 +323,9 @@ func (b *claudeBackend) handleUser(msg claudeSDKMessage, ch chan<- Message) {
 				CallID: block.ToolUseID,
 				Output: resultStr,
 			})
+			if runTrace != nil {
+				runTrace.RecordToolResult(block.ToolUseID, len(resultStr))
+			}
 		}
 	}
 }
@@ -362,10 +396,11 @@ type claudeLogEntry struct {
 }
 
 type claudeMessageContent struct {
-	Role    string               `json:"role"`
-	Model   string               `json:"model"`
-	Content []claudeContentBlock `json:"content"`
-	Usage   *claudeUsage         `json:"usage,omitempty"`
+	Role       string               `json:"role"`
+	Model      string               `json:"model"`
+	Content    []claudeContentBlock `json:"content"`
+	Usage      *claudeUsage         `json:"usage,omitempty"`
+	StopReason string               `json:"stop_reason,omitempty"`
 }
 
 type claudeUsage struct {
