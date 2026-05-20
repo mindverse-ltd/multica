@@ -19,6 +19,7 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/tracing"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/redis/go-redis/v9"
 )
@@ -118,6 +119,18 @@ func envDuration(name string, def time.Duration) time.Duration {
 
 func main() {
 	logger.Init()
+	ctx := context.Background()
+
+	if shutdownTracing, err := tracing.Init(ctx); err != nil {
+		slog.Error("unable to initialize tracing", "error", err)
+		os.Exit(1)
+	} else {
+		defer func() {
+			if err := shutdownTracing(context.Background()); err != nil {
+				slog.Warn("opentelemetry deferred shutdown failed", "error", err)
+			}
+		}()
+	}
 
 	// Warn about missing configuration
 	if os.Getenv("JWT_SECRET") == "" {
@@ -145,7 +158,6 @@ func main() {
 	}
 
 	// Connect to database
-	ctx := context.Background()
 	pool, err := newDBPool(ctx, dbURL)
 	if err != nil {
 		slog.Error("unable to connect to database", "error", err)
@@ -366,6 +378,9 @@ func main() {
 			slog.Error("metrics server forced to shutdown", "error", err)
 		}
 		metricsShutdownCancel()
+	}
+	if err := tracing.Shutdown(context.Background()); err != nil {
+		slog.Warn("opentelemetry shutdown failed", "error", err)
 	}
 	slog.Info("server stopped")
 }

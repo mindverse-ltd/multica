@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/riandyrn/otelchi"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -146,6 +147,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r := chi.NewRouter()
 
 	// Global middleware
+	r.Use(otelchi.Middleware("multica-backend", otelchi.WithChiRoutes(r)))
 	r.Use(chimw.RequestID)
 	r.Use(middleware.ClientMetadata)
 	r.Use(middleware.RequestLogger)
