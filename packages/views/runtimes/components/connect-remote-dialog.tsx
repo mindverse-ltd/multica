@@ -11,11 +11,12 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { runtimeKeys } from "@multica/core/runtimes/queries";
+import { runtimeKeys, runtimeListOptions } from "@multica/core/runtimes/queries";
 import { useWSEvent } from "@multica/core/realtime";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
+import type { AgentRuntime } from "@multica/core/types";
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,26 @@ import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 
 type Step = "instructions" | "waiting" | "success";
+type RuntimeConnectionBaseline = Map<string, AgentRuntime["status"]>;
+const EMPTY_RUNTIMES: AgentRuntime[] = [];
+
+export function buildRuntimeConnectionBaseline(
+  runtimes: AgentRuntime[],
+): RuntimeConnectionBaseline {
+  return new Map(runtimes.map((runtime) => [runtime.id, runtime.status]));
+}
+
+export function findNewlyConnectedRuntime(
+  runtimes: AgentRuntime[],
+  baseline: RuntimeConnectionBaseline,
+): AgentRuntime | null {
+  return (
+    runtimes.find(
+      (runtime) =>
+        runtime.status === "online" && baseline.get(runtime.id) !== "online",
+    ) ?? null
+  );
+}
 
 export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const [step, setStep] = useState<Step>("instructions");
@@ -38,12 +59,35 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const navigation = useNavigation();
   const newRuntimeIdRef = useRef<string | null>(null);
+  const runtimeBaselineRef = useRef<RuntimeConnectionBaseline | null>(null);
+  const runtimeQuery = useQuery({
+    ...runtimeListOptions(wsId),
+    refetchInterval: step === "waiting" ? 3_000 : false,
+  });
+  const runtimes = runtimeQuery.data ?? EMPTY_RUNTIMES;
+
+  useEffect(() => {
+    if (runtimeBaselineRef.current || !runtimeQuery.isFetched) return;
+    runtimeBaselineRef.current = buildRuntimeConnectionBaseline(runtimes);
+  }, [runtimeQuery.isFetched, runtimes]);
+
+  useEffect(() => {
+    if (step === "success") return;
+    const baseline = runtimeBaselineRef.current;
+    if (!baseline) return;
+
+    const connected = findNewlyConnectedRuntime(runtimes, baseline);
+    if (!connected) return;
+
+    newRuntimeIdRef.current = connected.id;
+    setStep("success");
+  }, [runtimes, step]);
 
   // Listen for a new runtime registration while the dialog is open
   const handleDaemonRegister = useCallback(
     (payload: unknown) => {
       if (step === "waiting" || step === "instructions") {
-        qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+        void qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
         const p = payload as Record<string, unknown> | null;
         if (p?.runtime_id && typeof p.runtime_id === "string") {
           newRuntimeIdRef.current = p.runtime_id;
@@ -54,6 +98,12 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
     [step, qc, wsId],
   );
   useWSEvent("daemon:register", handleDaemonRegister);
+
+  const handleWaitForDaemon = useCallback(() => {
+    runtimeBaselineRef.current ??= buildRuntimeConnectionBaseline(runtimes);
+    setStep("waiting");
+    void qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });
+  }, [qc, runtimes, wsId]);
 
   const copyToClipboard = useCallback(
     (text: string, key: string) => {
@@ -92,7 +142,7 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
           <InstructionsStep
             copied={copied}
             onCopy={copyToClipboard}
-            onNext={() => setStep("waiting")}
+            onNext={handleWaitForDaemon}
             onClose={onClose}
           />
         )}
@@ -116,15 +166,22 @@ export function ConnectRemoteDialog({ onClose }: { onClose: () => void }) {
 // Step 1: Installation instructions
 // ---------------------------------------------------------------------------
 
-const INSTALL_CMD = "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
+export const CONNECT_REMOTE_COMMANDS = {
+  install:
+    "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash",
+  configure: `multica config set server_url https://multica.macaron.xin
+multica config set app_url https://multica.macaron.xin`,
+  login: "multica login --token <YOUR_TOKEN>",
+  start: `multica daemon start --device-name "my-ec2-instance"
+multica daemon status`,
+} as const;
 
-const CONFIGURE_CMD = `multica config set server_url https://multica.macaron.xin
-multica config set app_url https://multica.macaron.xin`;
-
-const LOGIN_CMD = "multica login --token <YOUR_TOKEN>";
-
-const START_CMD = `multica daemon start --device-name "my-ec2-instance"
-multica daemon status`;
+const {
+  install: INSTALL_CMD,
+  configure: CONFIGURE_CMD,
+  login: LOGIN_CMD,
+  start: START_CMD,
+} = CONNECT_REMOTE_COMMANDS;
 
 function CodeBlock({
   code,
@@ -140,8 +197,11 @@ function CodeBlock({
   const isCopied = copied === copyKey;
   return (
     <div className="relative rounded-md border bg-muted/50">
-      <pre className="overflow-x-auto p-2.5 pr-10 font-mono text-xs leading-relaxed text-foreground">
-        {code}
+      <pre
+        className="overflow-x-auto whitespace-pre-wrap p-2.5 pr-10 font-mono text-xs leading-relaxed text-foreground"
+        style={{ fontVariantLigatures: "none" }}
+      >
+        <code>{code}</code>
       </pre>
       <button
         type="button"
