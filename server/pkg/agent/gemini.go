@@ -18,11 +18,15 @@ type geminiBackend struct {
 }
 
 func (b *geminiBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	runTrace := startRunSpan(ctx, "gemini", opts)
+	ctx = runTrace.Context()
+
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "gemini"
 	}
 	if _, err := exec.LookPath(execPath); err != nil {
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("gemini executable not found at %q: %w", execPath, err)
 	}
 
@@ -46,12 +50,14 @@ func (b *geminiBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("gemini stdout pipe: %w", err)
 	}
 	cmd.Stderr = newLogWriter(b.cfg.Logger, "[gemini:stderr] ")
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("start gemini: %w", err)
 	}
 
@@ -114,6 +120,7 @@ func (b *geminiBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					CallID: evt.ToolID,
 					Input:  params,
 				})
+				runTrace.RecordToolUse(evt.ToolName, evt.ToolID)
 
 			case "tool_result":
 				trySend(msgCh, Message{
@@ -121,6 +128,7 @@ func (b *geminiBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 					CallID: evt.ToolID,
 					Output: evt.Output,
 				})
+				runTrace.RecordToolResult(evt.ToolID, len(evt.Output))
 
 			case "error":
 				trySend(msgCh, Message{
@@ -135,6 +143,7 @@ func (b *geminiBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				}
 				if evt.Stats != nil {
 					b.accumulateUsage(usage, evt.Stats)
+					runTrace.RecordUsageMap(usage)
 				}
 			}
 		}
@@ -154,6 +163,7 @@ func (b *geminiBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		}
 
 		b.cfg.Logger.Info("gemini finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
+		runTrace.Finish(finalStatus, finalError)
 
 		resCh <- Result{
 			Status:     finalStatus,
@@ -182,10 +192,10 @@ func (b *geminiBackend) accumulateUsage(usage map[string]TokenUsage, stats *gemi
 // ── Gemini stream-json event types ──
 
 type geminiStreamEvent struct {
-	Type      string          `json:"type"`
-	Timestamp string          `json:"timestamp,omitempty"`
-	SessionID string          `json:"session_id,omitempty"`
-	Model     string          `json:"model,omitempty"`
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+	Model     string `json:"model,omitempty"`
 
 	// message fields
 	Role    string `json:"role,omitempty"`
@@ -216,12 +226,12 @@ type geminiStreamError struct {
 }
 
 type geminiStreamStats struct {
-	TotalTokens  int                          `json:"total_tokens"`
-	InputTokens  int                          `json:"input_tokens"`
-	OutputTokens int                          `json:"output_tokens"`
-	DurationMs   int                          `json:"duration_ms"`
-	ToolCalls    int                          `json:"tool_calls"`
-	Models       map[string]geminiModelStats  `json:"models,omitempty"`
+	TotalTokens  int                         `json:"total_tokens"`
+	InputTokens  int                         `json:"input_tokens"`
+	OutputTokens int                         `json:"output_tokens"`
+	DurationMs   int                         `json:"duration_ms"`
+	ToolCalls    int                         `json:"tool_calls"`
+	Models       map[string]geminiModelStats `json:"models,omitempty"`
 }
 
 type geminiModelStats struct {
@@ -242,6 +252,7 @@ type geminiModelStats struct {
 //	-o stream-json        streaming NDJSON output for live events
 //	-m <model>            optional model override
 //	-r <session>          resume a previous session (if provided)
+//
 // geminiBlockedArgs are flags hardcoded by the daemon that must not be
 // overridden by user-configured custom_args.
 var geminiBlockedArgs = map[string]blockedArgMode{

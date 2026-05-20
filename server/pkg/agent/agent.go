@@ -24,6 +24,13 @@ type Backend interface {
 type ExecOptions struct {
 	Cwd   string
 	Model string
+	// Metadata is optional execution context used for observability.
+	RunID           string
+	IssueID         string
+	IssueIdentifier string
+	WorkspaceID     string
+	AgentID         string
+	AgentName       string
 	// SystemPrompt is consumed only by providers that can pass or safely inline
 	// developer/system instructions. Hermes ACP intentionally ignores it and
 	// relies on cwd-scoped context files such as AGENTS.md instead.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/pkg/agent"
 )
 
 type RegistryOptions struct {
@@ -38,6 +39,7 @@ func NewRegistry(opts RegistryOptions) *Registry {
 
 	httpMetrics := NewHTTPMetrics()
 	reg.MustRegister(httpMetrics.Collectors()...)
+	reg.MustRegister(agent.AgentTokenMetrics())
 
 	if opts.Pool != nil {
 		reg.MustRegister(NewDBCollector(opts.Pool))

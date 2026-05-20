@@ -44,11 +44,15 @@ func buildCodexArgs(opts ExecOptions, logger *slog.Logger) []string {
 }
 
 func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	runTrace := startRunSpan(ctx, "codex", opts)
+	ctx = runTrace.Context()
+
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "codex"
 	}
 	if _, err := exec.LookPath(execPath); err != nil {
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("codex executable not found at %q: %w", execPath, err)
 	}
 
@@ -74,11 +78,13 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("codex stdout pipe: %w", err)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("codex stdin pipe: %w", err)
 	}
 	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[codex:stderr] "), codexStderrTailBytes)
@@ -86,6 +92,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
 
@@ -109,6 +116,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		notificationProtocol: "unknown",
 		onMessage: func(msg Message) {
 			logCodexAgentMessage(b.cfg.Logger, msg)
+			runTrace.RecordMessage(msg)
 			if msg.Type == MessageText {
 				outputMu.Lock()
 				output.WriteString(msg.Content)
@@ -174,6 +182,9 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		startTime := time.Now()
 		finalStatus := "completed"
 		var finalError string
+		defer func() {
+			runTrace.Finish(finalStatus, finalError)
+		}()
 
 		// 1. Initialize handshake
 		_, err := c.request(runCtx, "initialize", map[string]any{
@@ -316,6 +327,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				model = "unknown"
 			}
 			usageMap = map[string]TokenUsage{model: u}
+			runTrace.RecordUsageMap(usageMap)
 		}
 
 		resCh <- Result{

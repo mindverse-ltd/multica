@@ -31,11 +31,15 @@ type kimiBackend struct {
 }
 
 func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptions) (*Session, error) {
+	runTrace := startRunSpan(ctx, "kimi", opts)
+	ctx = runTrace.Context()
+
 	execPath := b.cfg.ExecutablePath
 	if execPath == "" {
 		execPath = "kimi"
 	}
 	if _, err := exec.LookPath(execPath); err != nil {
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("kimi executable not found at %q: %w", execPath, err)
 	}
 
@@ -61,11 +65,13 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("kimi stdout pipe: %w", err)
 	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("kimi stdin pipe: %w", err)
 	}
 	// Forward stderr to the daemon log *and* sniff provider-level
@@ -84,11 +90,13 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("kimi stderr pipe: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		cancel()
+		runTrace.Finish("failed", err.Error())
 		return nil, fmt.Errorf("start kimi: %w", err)
 	}
 
@@ -127,6 +135,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			if msg.Type == MessageToolUse {
 				msg.Tool = kimiToolNameFromTitle(msg.Tool)
 			}
+			runTrace.RecordMessage(msg)
 			if msg.Type == MessageText {
 				outputMu.Lock()
 				output.WriteString(msg.Content)
@@ -185,6 +194,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		if err != nil {
 			finalStatus = "failed"
 			finalError = fmt.Sprintf("kimi initialize failed: %v", err)
+			runTrace.Finish(finalStatus, finalError)
 			resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 			return
 		}
@@ -203,6 +213,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			if err != nil {
 				finalStatus = "failed"
 				finalError = fmt.Sprintf("kimi session/resume failed: %v", err)
+				runTrace.Finish(finalStatus, finalError)
 				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 				return
 			}
@@ -223,6 +234,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			if err != nil {
 				finalStatus = "failed"
 				finalError = fmt.Sprintf("kimi session/new failed: %v", err)
+				runTrace.Finish(finalStatus, finalError)
 				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 				return
 			}
@@ -230,6 +242,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			if sessionID == "" {
 				finalStatus = "failed"
 				finalError = "kimi session/new returned no session ID"
+				runTrace.Finish(finalStatus, finalError)
 				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 				return
 			}
@@ -262,6 +275,7 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 					DurationMs: time.Since(startTime).Milliseconds(),
 					SessionID:  sessionID,
 				}
+				runTrace.Finish(finalStatus, finalError)
 				return
 			}
 			b.cfg.Logger.Info("kimi session model set", "model", opts.Model)
@@ -340,7 +354,9 @@ func (b *kimiBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				model = "unknown"
 			}
 			usageMap = map[string]TokenUsage{model: u}
+			runTrace.RecordUsageMap(usageMap)
 		}
+		runTrace.Finish(finalStatus, finalError)
 
 		resCh <- Result{
 			Status:     finalStatus,
