@@ -134,7 +134,6 @@ GOOGLE_REDIRECT_URI=http://127.0.0.1:13030/auth/callback
 FEISHU_APP_ID=<飞书应用 app id>
 FEISHU_APP_SECRET=<飞书应用 secret>
 FEISHU_REDIRECT_URI=http://127.0.0.1:13030/auth/callback
-NEXT_PUBLIC_FEISHU_APP_ID=<飞书应用 app id>
 JWT_SECRET=<随机 64 位 hex>
 ```
 
@@ -145,15 +144,14 @@ cd /opt/multica
 make selfhost-feishu-configure \
   FEISHU_APP_ID='<飞书应用 app id>' \
   FEISHU_APP_SECRET='<飞书应用 secret>' \
-  FEISHU_REDIRECT_URI='http://127.0.0.1:13030/auth/callback' \
-  NEXT_PUBLIC_FEISHU_APP_ID='<飞书应用 app id>'
+  FEISHU_REDIRECT_URI='http://127.0.0.1:13030/auth/callback'
 
 make selfhost-native-stop
 make selfhost-native-backend
 make selfhost-native-frontend
 ```
 
-如果只是第一次补充 `NEXT_PUBLIC_FEISHU_APP_ID`，而前端登录页仍未出现飞书按钮，说明当前 `.next` 产物还是旧 bundle，需要重新执行前端构建，或从本地把新的 `apps/web/.next` 运行产物重新发布到远端，再重启前端。
+飞书按钮由 backend 的 `/api/config` 运行时下发 `FEISHU_APP_ID` 控制；改完 `.env` 后重启 backend/frontend 即可，不需要重新构建前端镜像。
 
 说明：
 
@@ -288,7 +286,6 @@ curl -I http://127.0.0.1:13030
 - `FEISHU_APP_ID`
 - `FEISHU_APP_SECRET`
 - `FEISHU_REDIRECT_URI`
-- `NEXT_PUBLIC_FEISHU_APP_ID`
 
 可先执行：
 
@@ -300,7 +297,7 @@ make selfhost-feishu-preflight
 应额外检查：
 
 - 浏览器实际打开 `/login` 时可看到 `Continue with Feishu`
-- `make selfhost-feishu-preflight` 不再提示缺少环境变量，并能识别前端 bundle 已包含飞书登录 UI
+- `make selfhost-feishu-preflight` 不再提示缺少环境变量，并能确认 `/api/config` 已下发飞书 app id
 - `POST /auth/feishu` 不再返回 `503 Feishu login is not configured`
 - 完成授权后可正常回到 `/auth/callback`
 - Desktop 登录入口可通过 `provider=feishu` 走同一套回调链路
@@ -347,8 +344,7 @@ cd /opt/multica
 make selfhost-feishu-configure \
   FEISHU_APP_ID='<飞书应用 app id>' \
   FEISHU_APP_SECRET='<飞书应用 secret>' \
-  FEISHU_REDIRECT_URI='http://127.0.0.1:13030/auth/callback' \
-  NEXT_PUBLIC_FEISHU_APP_ID='<飞书应用 app id>'
+  FEISHU_REDIRECT_URI='http://127.0.0.1:13030/auth/callback'
 
 make selfhost-native-stop
 make selfhost-native-backend

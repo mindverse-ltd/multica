@@ -15,7 +15,7 @@ set -a
 set +a
 
 missing=0
-for key in FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_REDIRECT_URI NEXT_PUBLIC_FEISHU_APP_ID; do
+for key in FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_REDIRECT_URI; do
   if [ -z "${!key:-}" ]; then
     echo "MISSING: $key"
     missing=1
@@ -34,16 +34,26 @@ else
   echo "WARN: backend health endpoint is unavailable"
 fi
 
+if config="$(curl -fsS "$backend_url/api/config" 2>/dev/null)"; then
+  if printf '%s' "$config" | grep -q '"feishu_app_id"'; then
+    echo "OK: /api/config exposes Feishu app id"
+  else
+    echo "WARN: /api/config does not expose feishu_app_id"
+    echo "HINT: check FEISHU_APP_ID and restart the backend"
+  fi
+else
+  echo "WARN: failed to fetch /api/config"
+fi
+
 if html="$(curl -fsS "$frontend_url/login" 2>/dev/null)"; then
   if printf '%s' "$html" | grep -q 'Continue with Feishu'; then
     echo "OK: login page shows Feishu button"
   elif grep -R -q 'Continue with Feishu' ./apps/web/.next 2>/dev/null; then
-    echo "OK: frontend bundle includes Feishu login UI"
+    echo "OK: login page route is reachable; Feishu button is client-rendered"
     echo "NOTE: the login page is client-rendered, so raw curl HTML may not contain the button text"
   else
     echo "WARN: login page does not show Feishu button"
-    echo "HINT: if NEXT_PUBLIC_FEISHU_APP_ID was just changed, restart the frontend first"
-    echo "HINT: if it still does not appear, rebuild or redeploy the frontend bundle with NEXT_PUBLIC_FEISHU_APP_ID baked in"
+    echo "HINT: Feishu app id is loaded at runtime from /api/config; restart the backend and frontend"
   fi
 else
   echo "WARN: failed to fetch login page"

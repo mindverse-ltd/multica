@@ -395,13 +395,12 @@ make selfhost-native-backend
 make selfhost-native-frontend
 make selfhost-native-check
 make selfhost-native-stop
-make selfhost-feishu-configure FEISHU_APP_ID=... FEISHU_APP_SECRET=... FEISHU_REDIRECT_URI=... NEXT_PUBLIC_FEISHU_APP_ID=...
+make selfhost-feishu-configure FEISHU_APP_ID=... FEISHU_APP_SECRET=... FEISHU_REDIRECT_URI=...
 make selfhost-native-stop
 make selfhost-native-backend
 make selfhost-native-frontend
 make selfhost-feishu-preflight
-# 预检会同时检查 env、前端 bundle 是否包含飞书登录 UI，以及 /auth/feishu 是否仍返回 503
-# 如果补了 NEXT_PUBLIC_FEISHU_APP_ID 但按钮还没出现，通常需要重新构建或重新发布前端 .next 产物
+# 预检会同时检查 env、/api/config 是否下发飞书 app id，以及 /auth/feishu 是否仍返回 503
 ```
 
 ## 12. 维护结论

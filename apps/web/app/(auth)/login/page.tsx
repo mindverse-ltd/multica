@@ -23,10 +23,8 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";
 import { LoginPage, validateCliCallback } from "@multica/views/auth";
+import { useConfigStore } from "@multica/core/config";
 import { useT } from "@multica/views/i18n";
-
-const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
-const feishuClientId = process.env.NEXT_PUBLIC_FEISHU_APP_ID;
 
 /**
  * Pick where a logged-in user with no explicit `?next=` should land.
@@ -74,6 +72,7 @@ function LoginPageContent() {
   // cannot bounce the user off-origin after a successful login.
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
   const bindEmailSessionToken = searchParams.get("bind_email");
+  const feishuClientId = useConfigStore((s) => s.feishuAppId);
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
