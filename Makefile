@@ -176,7 +176,7 @@ selfhost-feishu-preflight:
 
 selfhost-feishu-configure:
 	$(REQUIRE_ENV)
-	@bash scripts/selfhost-feishu-configure.sh "$(ENV_FILE)" "$(FEISHU_APP_ID)" "$(FEISHU_APP_SECRET)" "$(FEISHU_REDIRECT_URI)" "$(NEXT_PUBLIC_FEISHU_APP_ID)"
+	@bash scripts/selfhost-feishu-configure.sh "$(ENV_FILE)" "$(FEISHU_APP_ID)" "$(FEISHU_APP_SECRET)" "$(FEISHU_REDIRECT_URI)"
 
 # ---------- One-click commands ----------
 ##@ One-click

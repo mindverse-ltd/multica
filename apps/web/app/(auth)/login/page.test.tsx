@@ -42,10 +42,6 @@ const {
   },
 }));
 
-vi.hoisted(() => {
-  process.env.NEXT_PUBLIC_FEISHU_APP_ID = "feishu-client-id";
-});
-
 // Mock next/navigation
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
@@ -88,6 +84,7 @@ vi.mock("@multica/core/api", () => ({
   },
 }));
 
+import { configStore } from "@multica/core/config";
 import LoginPage from "./page";
 
 describe("LoginPage", () => {
@@ -96,6 +93,10 @@ describe("LoginPage", () => {
     searchParamsState.params = new URLSearchParams();
     authStateRef.state.user = null;
     authStateRef.state.isLoading = false;
+    configStore.getState().setAuthConfig({
+      allowSignup: true,
+      feishuAppId: "feishu-client-id",
+    });
   });
 
   it("renders Feishu-only login without email entry", () => {
