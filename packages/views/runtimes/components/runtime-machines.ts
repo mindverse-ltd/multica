@@ -35,6 +35,15 @@ interface RuntimeMachineOptions {
   localDaemonId?: string | null;
   localMachineName?: string | null;
   workloadByRuntimeId?: Map<string, RuntimeWorkloadSummary>;
+  /**
+   * When true, guarantee that the result contains a machine flagged
+   * `isCurrent`. If no server-side runtime matches the local daemon
+   * (e.g. the daemon is stopped, was never started, or its runtime was
+   * already GC'd), a placeholder local machine is synthesized so the
+   * caller can still attach controls to it (Start button, etc.).
+   * Desktop sets this; web omits it.
+   */
+  ensureLocalMachine?: boolean;
 }
 
 interface RuntimeMachineDraft {
@@ -80,9 +89,40 @@ export function buildRuntimeMachines(
     drafts.set(id, draft);
   }
 
-  return Array.from(drafts.values())
-    .map((draft) => finalizeRuntimeMachine(draft, options))
-    .sort(compareRuntimeMachines);
+  const machines = Array.from(drafts.values()).map((draft) =>
+    finalizeRuntimeMachine(draft, options),
+  );
+
+  if (options.ensureLocalMachine && !machines.some((m) => m.isCurrent)) {
+    machines.push(placeholderLocalMachine(options));
+  }
+
+  return machines.sort(compareRuntimeMachines);
+}
+
+function placeholderLocalMachine(
+  options: RuntimeMachineOptions,
+): RuntimeMachine {
+  const daemonId = options.localDaemonId ?? null;
+  return {
+    id: daemonId ? `local:${daemonId}` : "local:placeholder",
+    daemonId,
+    title: options.localMachineName ?? "This machine",
+    subtitle: null,
+    deviceInfo: null,
+    cliVersion: null,
+    mode: "local",
+    section: "local",
+    isCurrent: true,
+    health: "offline",
+    runtimes: [],
+    onlineCount: 0,
+    issueCount: 0,
+    runningCount: 0,
+    queuedCount: 0,
+    providerNames: [],
+    lastSeenAt: null,
+  };
 }
 
 export function filterRuntimeMachines(
@@ -253,15 +293,29 @@ function compactDeviceInfo(
     .split(" · ")
     .map((part) => part.trim())
     .filter(Boolean)
-    .filter((part) => part !== title);
+    .filter((part) => part !== title)
+    .filter((part) => !isAgentVersionLike(part));
   const primary = parts[0];
   if (!primary) return null;
 
-  const runtimeVersion = primary.match(/^(.+?)\s+\(([^)]+)\)$/);
-  if (runtimeVersion?.[1] && runtimeVersion[2]) {
-    return `${runtimeVersion[2]} ${runtimeVersion[1]}`;
+  // Reshape OS+arch produced by formatDeviceInfo (e.g. "macOS (x86_64)")
+  // into the more scannable "x86_64 macOS". Version strings — the only
+  // other shape that historically carried parens — are filtered out
+  // above so they can't pollute the per-machine subtitle.
+  const osArch = primary.match(/^(.+?)\s+\(([^)]+)\)$/);
+  if (osArch?.[1] && osArch[2]) {
+    return `${osArch[2]} ${osArch[1]}`;
   }
   return primary;
+}
+
+// True for parts that carry an agent CLI version, not machine info —
+// e.g. "2.1.5 (Claude Code)", "codex-cli 0.118.0", "1.0.20", "claude 1.0.0".
+// Those describe a runtime, not the host, so they should never become a
+// machine's subtitle (otherwise every claude-equipped daemon's row reads
+// "Claude Code …", drowning out actual per-machine differences).
+function isAgentVersionLike(part: string): boolean {
+  return /(?:^|\s)v?\d+\.\d+\.\d+/.test(part);
 }
 
 function latestLastSeenAt(runtimes: AgentRuntime[]): string | null {

@@ -206,9 +206,9 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Becoming a workspace member is the physical event that "completes" onboarding —
-	// keep this atomic with CreateMember so `member` and `onboarded_at`
-	// can never disagree. COALESCE in MarkUserOnboarded keeps it idempotent.
+	// Company self-host keeps workspace creation as the physical event that
+	// completes onboarding, matching the default-workspace membership update
+	// above and avoiding a post-create onboarding loop.
 	if _, err := qtx.MarkUserOnboarded(r.Context(), parseUUID(userID)); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to mark user onboarded")
 		return
@@ -219,13 +219,15 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wsID := uuidToString(ws.ID)
+
 	// "Is this the user's first workspace?" is derived in PostHog by looking
 	// at whether they have a prior workspace_created event, not stamped at
 	// emit time. Stamping here would race under concurrent creates without
 	// a schema change, and the event stream answers the question exactly.
-	h.Analytics.Capture(analytics.WorkspaceCreated(userID, uuidToString(ws.ID)))
+	h.Analytics.Capture(analytics.WorkspaceCreated(userID, wsID))
 
-	slog.Info("workspace created", append(logger.RequestAttrs(r), "workspace_id", uuidToString(ws.ID), "name", ws.Name, "slug", ws.Slug)...)
+	slog.Info("workspace created", append(logger.RequestAttrs(r), "workspace_id", wsID, "name", ws.Name, "slug", ws.Slug)...)
 	writeJSON(w, http.StatusCreated, workspaceToResponse(ws))
 }
 
@@ -528,6 +530,8 @@ func (h *Handler) UpdateMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.MembershipCache.Invalidate(r.Context(), uuidToString(target.UserID), workspaceID)
+
 	user, err := h.Queries.GetUser(r.Context(), updatedMember.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load member")
@@ -585,6 +589,8 @@ func (h *Handler) DeleteMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.MembershipCache.Invalidate(r.Context(), uuidToString(target.UserID), workspaceID)
+
 	wsIDStr := uuidToString(requester.WorkspaceID)
 	logRevocation(result, wsIDStr, uuidToString(target.UserID))
 	h.publishRevocation(r.Context(), result, wsIDStr, "member", requesterUserID)
@@ -625,6 +631,8 @@ func (h *Handler) LeaveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.MembershipCache.Invalidate(r.Context(), uuidToString(member.UserID), workspaceID)
+
 	userID := requestUserID(r)
 	logRevocation(result, workspaceID, uuidToString(member.UserID))
 	h.publishRevocation(r.Context(), result, workspaceID, "member", userID)
@@ -653,6 +661,16 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	if requester.Role != "owner" {
 		writeError(w, http.StatusForbidden, "insufficient permissions")
 		return
+	}
+
+	// Invalidate membership cache for all workspace members before deletion.
+	// After CASCADE deletes the member rows, cache entries become harmless
+	// orphans (downstream lookups for the deleted workspace will fail), but
+	// proactive invalidation prevents any stale-access window up to TTL.
+	if members, err := h.Queries.ListMembers(r.Context(), requester.WorkspaceID); err == nil {
+		for _, m := range members {
+			h.MembershipCache.Invalidate(r.Context(), uuidToString(m.UserID), workspaceID)
+		}
 	}
 
 	// At this point workspaceMember has resolved → workspaceID is a valid UUID

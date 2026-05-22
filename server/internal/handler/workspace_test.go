@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"sort"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 func TestCreateWorkspace_RejectsReservedSlug(t *testing.T) {
@@ -33,6 +35,44 @@ func TestCreateWorkspace_RejectsReservedSlug(t *testing.T) {
 				t.Fatalf("slug %q: expected 400, got %d: %s", slug, w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// TestCreateWorkspaceMarksOnboarded guards the company onboarding contract:
+// creating the first workspace completes onboarding while preserving default
+// workspace membership.
+func TestCreateWorkspaceMarksOnboarded(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	const slug = "handler-tests-onboarded-set"
+	_, _ = testPool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, slug)
+	// Ensure the test user starts un-onboarded so the assertion is meaningful.
+	_, _ = testPool.Exec(ctx, `UPDATE "user" SET onboarded_at = NULL WHERE id = $1`, testUserID)
+
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE slug = $1`, slug)
+		_, _ = testPool.Exec(context.Background(), `UPDATE "user" SET onboarded_at = NULL WHERE id = $1`, testUserID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/workspaces", map[string]any{
+		"name": "Onboarding Invariant Probe",
+		"slug": slug,
+	})
+	testHandler.CreateWorkspace(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateWorkspace: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var onboardedAt pgtype.Timestamptz
+	if err := testPool.QueryRow(ctx, `SELECT onboarded_at FROM "user" WHERE id = $1`, testUserID).Scan(&onboardedAt); err != nil {
+		t.Fatalf("lookup user: %v", err)
+	}
+	if !onboardedAt.Valid {
+		t.Fatal("CreateWorkspace did not mark user as onboarded")
 	}
 }
 
