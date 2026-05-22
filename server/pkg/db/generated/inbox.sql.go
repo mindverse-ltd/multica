@@ -158,9 +158,15 @@ func (q *Queries) ArchiveInboxItem(ctx context.Context, id pgtype.UUID) (InboxIt
 }
 
 const countUnreadInbox = `-- name: CountUnreadInbox :one
-SELECT count(DISTINCT issue_id) + count(*) FILTER (WHERE issue_id IS NULL)
-FROM inbox_item
-WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND read = false AND archived = false
+WITH deduped AS (
+    SELECT DISTINCT ON (COALESCE(issue_id, id)) read
+    FROM inbox_item
+    WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND archived = false
+    ORDER BY COALESCE(issue_id, id), created_at DESC, id DESC
+)
+SELECT count(*)
+FROM deduped
+WHERE read = false
 `
 
 type CountUnreadInboxParams struct {
@@ -169,9 +175,10 @@ type CountUnreadInboxParams struct {
 	RecipientID   pgtype.UUID `json:"recipient_id"`
 }
 
-// Counts unread inbox items with the same issue-level dedupe semantics as
-// deduplicateInboxItems: non-NULL issue_id values count once per issue, while
-// NULL issue_id rows count individually.
+// Counts unread inbox items with the same dedupe semantics as
+// deduplicateInboxItems: archived items are excluded, then each non-NULL
+// issue_id is represented by its newest inbox row while NULL issue_id rows
+// remain independent. Only unread representative rows count.
 func (q *Queries) CountUnreadInbox(ctx context.Context, arg CountUnreadInboxParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countUnreadInbox, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
 	var count int64
