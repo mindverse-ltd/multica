@@ -42,6 +42,14 @@ The Multica server scans every 30 seconds. Two kinds of timeout trigger a failur
 
 Both timeouts use failure reason `timeout` and **retry automatically** (next section). For the related runtime-missing check, see [Daemon and runtimes → When a runtime is marked offline](/daemon-runtimes#when-a-runtime-is-marked-offline).
 
+Provider adapters can also fail a task before the server-side 2.5 hour limit. Codex has a semantic inactivity watchdog: if Codex produces no agent progress for **10 minutes**, the daemon reports the task as failed with reason `timeout`. This watchdog is meant to catch stuck turns, and it does not count a still-running terminal command as inactivity. If your Codex workflow legitimately has longer silent phases, tune it with:
+
+```bash
+MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT=30m multica daemon restart
+```
+
+or pass `--codex-semantic-inactivity-timeout 30m` to `multica daemon start` / `restart`. The overall per-task daemon limit is separate: `MULTICA_AGENT_TIMEOUT` / `--agent-timeout`, default **2 hours**.
+
 ## Which failures retry automatically, which don't
 
 Failures fall into two categories: **retryable** and **non-retryable**.
