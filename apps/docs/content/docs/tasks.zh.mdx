@@ -42,14 +42,6 @@ Multica 服务器每 30 秒扫描一次，有两种超时会触发失败：
 
 两种超时的失败原因都是 `timeout`，**会自动重试**（下一节）。关联的运行时失联判定见 [守护进程与运行时 → 运行时什么时候被判定为离线](/daemon-runtimes#运行时什么时候被判定为离线)。
 
-各 AI 工具适配层也可能在服务端 2.5 小时上限之前终止任务。Codex 有一个语义无进展 watchdog：如果 Codex 连续 **10 分钟** 没有产出 agent 进展，守护进程会把任务按 `timeout` 上报失败。这个 watchdog 用来抓卡住的 turn；正在运行中的 terminal 命令不会被当成无进展。如果你的 Codex 工作流确实存在更长的静默阶段，可以这样调大：
-
-```bash
-MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT=30m multica daemon restart
-```
-
-也可以给 `multica daemon start` / `restart` 传 `--codex-semantic-inactivity-timeout 30m`。整体单任务上限是另一项配置：`MULTICA_AGENT_TIMEOUT` / `--agent-timeout`，默认 **2 小时**。
-
 ## 哪些失败会自动重试，哪些不会
 
 失败分两类：**可重试**和**不可重试**。
