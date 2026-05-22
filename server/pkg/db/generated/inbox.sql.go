@@ -294,22 +294,33 @@ func (q *Queries) GetInboxItemInWorkspace(ctx context.Context, arg GetInboxItemI
 	return i, err
 }
 
-const listInboxItems = `-- name: ListInboxItems :many
+const listInboxItemsPage = `-- name: ListInboxItemsPage :many
 SELECT i.id, i.workspace_id, i.recipient_type, i.recipient_id, i.type, i.severity, i.issue_id, i.title, i.body, i.read, i.archived, i.created_at, i.actor_type, i.actor_id, i.details,
        iss.status as issue_status
 FROM inbox_item i
 LEFT JOIN issue iss ON iss.id = i.issue_id
-WHERE i.workspace_id = $1 AND i.recipient_type = $2 AND i.recipient_id = $3 AND i.archived = false
-ORDER BY i.created_at DESC
+WHERE i.workspace_id = $1
+  AND i.recipient_type = $2
+  AND i.recipient_id = $3
+  AND i.archived = false
+  AND (
+    $4::timestamptz IS NULL
+    OR (i.created_at, i.id) < ($4::timestamptz, $5::uuid)
+  )
+ORDER BY i.created_at DESC, i.id DESC
+LIMIT $6
 `
 
-type ListInboxItemsParams struct {
-	WorkspaceID   pgtype.UUID `json:"workspace_id"`
-	RecipientType string      `json:"recipient_type"`
-	RecipientID   pgtype.UUID `json:"recipient_id"`
+type ListInboxItemsPageParams struct {
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	RecipientType   string             `json:"recipient_type"`
+	RecipientID     pgtype.UUID        `json:"recipient_id"`
+	BeforeCreatedAt pgtype.Timestamptz `json:"before_created_at"`
+	BeforeID        pgtype.UUID        `json:"before_id"`
+	Limit           int32              `json:"limit"`
 }
 
-type ListInboxItemsRow struct {
+type ListInboxItemsPageRow struct {
 	ID            pgtype.UUID        `json:"id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
 	RecipientType string             `json:"recipient_type"`
@@ -328,15 +339,22 @@ type ListInboxItemsRow struct {
 	IssueStatus   pgtype.Text        `json:"issue_status"`
 }
 
-func (q *Queries) ListInboxItems(ctx context.Context, arg ListInboxItemsParams) ([]ListInboxItemsRow, error) {
-	rows, err := q.db.Query(ctx, listInboxItems, arg.WorkspaceID, arg.RecipientType, arg.RecipientID)
+func (q *Queries) ListInboxItemsPage(ctx context.Context, arg ListInboxItemsPageParams) ([]ListInboxItemsPageRow, error) {
+	rows, err := q.db.Query(ctx, listInboxItemsPage,
+		arg.WorkspaceID,
+		arg.RecipientType,
+		arg.RecipientID,
+		arg.BeforeCreatedAt,
+		arg.BeforeID,
+		arg.Limit,
+	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListInboxItemsRow{}
+	items := []ListInboxItemsPageRow{}
 	for rows.Next() {
-		var i ListInboxItemsRow
+		var i ListInboxItemsPageRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.WorkspaceID,

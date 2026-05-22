@@ -1,6 +1,10 @@
-import { queryOptions, useQuery } from "@tanstack/react-query";
+import {
+  infiniteQueryOptions,
+  useInfiniteQuery,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import { api } from "../api";
-import type { InboxItem } from "../types";
+import type { InboxItem, InboxPage } from "../types";
 
 export const inboxKeys = {
   all: (wsId: string) => ["inbox", wsId] as const,
@@ -8,10 +12,62 @@ export const inboxKeys = {
 };
 
 export function inboxListOptions(wsId: string) {
-  return queryOptions({
+  return infiniteQueryOptions({
     queryKey: inboxKeys.list(wsId),
-    queryFn: () => api.listInbox(),
+    queryFn: ({ pageParam }) => api.listInbox({ cursor: pageParam, limit: 50 }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.next_cursor,
   });
+}
+
+export function getInboxItemsFromPages(
+  data: InfiniteData<InboxPage> | undefined,
+): InboxItem[] {
+  return data?.pages.flatMap((page) => page.items) ?? [];
+}
+
+export function mapInboxPages(
+  data: InfiniteData<InboxPage> | undefined,
+  mapItem: (item: InboxItem) => InboxItem | null,
+): InfiniteData<InboxPage> | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.map(mapItem).filter((item): item is InboxItem => item !== null),
+    })),
+  };
+}
+
+export function markInboxItemReadInPages(
+  data: InfiniteData<InboxPage> | undefined,
+  id: string,
+): InfiniteData<InboxPage> | undefined {
+  return mapInboxPages(data, (item) =>
+    item.id === id ? { ...item, read: true } : item,
+  );
+}
+
+export function archiveInboxItemInPages(
+  data: InfiniteData<InboxPage> | undefined,
+  id: string,
+): InfiniteData<InboxPage> | undefined {
+  const target = getInboxItemsFromPages(data).find((item) => item.id === id);
+  const issueId = target?.issue_id;
+  return mapInboxPages(data, (item) =>
+    item.id === id || (issueId && item.issue_id === issueId)
+      ? { ...item, archived: true }
+      : item,
+  );
+}
+
+export function markAllInboxReadInPages(
+  data: InfiniteData<InboxPage> | undefined,
+): InfiniteData<InboxPage> | undefined {
+  return mapInboxPages(data, (item) =>
+    !item.archived ? { ...item, read: true } : item,
+  );
 }
 
 /**
@@ -20,12 +76,12 @@ export function inboxListOptions(wsId: string) {
  * single issue with three unread notifications counts once.
  */
 export function useInboxUnreadCount(wsId: string | null | undefined): number {
-  const { data } = useQuery({
-    queryKey: inboxKeys.list(wsId ?? ""),
-    queryFn: () => api.listInbox(),
+  const { data } = useInfiniteQuery({
+    ...inboxListOptions(wsId ?? ""),
     enabled: !!wsId,
-    select: (items: InboxItem[]) =>
-      deduplicateInboxItems(items).filter((i) => !i.read).length,
+    select: (data) =>
+      deduplicateInboxItems(getInboxItemsFromPages(data)).filter((i) => !i.read)
+        .length,
   });
   return data ?? 0;
 }

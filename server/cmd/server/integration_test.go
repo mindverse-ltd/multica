@@ -781,15 +781,59 @@ func TestDeleteWorkspaceRequiresOwner(t *testing.T) {
 // ---- Inbox through full router ----
 
 func TestInboxThroughRouter(t *testing.T) {
-	resp := authRequest(t, "GET", "/api/inbox", nil)
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `DELETE FROM inbox_item WHERE workspace_id = $1`, testWorkspaceID); err != nil {
+		t.Fatalf("clear inbox: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM inbox_item WHERE workspace_id = $1`, testWorkspaceID)
+	})
+
+	for i, createdAt := range []string{
+		"2026-05-22T10:00:00Z",
+		"2026-05-22T09:00:00Z",
+		"2026-05-22T08:00:00Z",
+	} {
+		if _, err := testPool.Exec(ctx, `
+			INSERT INTO inbox_item (
+				workspace_id, recipient_type, recipient_id, type, severity, title, created_at
+			)
+			VALUES ($1, 'member', $2, 'mentioned', 'info', $3, $4)
+		`, testWorkspaceID, testUserID, fmt.Sprintf("Inbox item %d", i+1), createdAt); err != nil {
+			t.Fatalf("seed inbox item: %v", err)
+		}
+	}
+
+	resp := authRequest(t, "GET", "/api/inbox?limit=2", nil)
 	if resp.StatusCode != 200 {
 		t.Fatalf("ListInbox: expected 200, got %d", resp.StatusCode)
 	}
-	var items []map[string]any
-	readJSON(t, resp, &items)
-	// Inbox may be empty, just verify it returns valid JSON array
-	if items == nil {
-		t.Fatal("expected non-nil inbox items array")
+	var firstPage struct {
+		Items      []map[string]any `json:"items"`
+		NextCursor *string          `json:"next_cursor"`
+	}
+	readJSON(t, resp, &firstPage)
+	if got := len(firstPage.Items); got != 2 {
+		t.Fatalf("first page item count = %d, want 2", got)
+	}
+	if firstPage.NextCursor == nil || *firstPage.NextCursor == "" {
+		t.Fatal("expected next_cursor on first page")
+	}
+
+	resp = authRequest(t, "GET", "/api/inbox?limit=2&cursor="+*firstPage.NextCursor, nil)
+	if resp.StatusCode != 200 {
+		t.Fatalf("ListInbox next page: expected 200, got %d", resp.StatusCode)
+	}
+	var secondPage struct {
+		Items      []map[string]any `json:"items"`
+		NextCursor *string          `json:"next_cursor"`
+	}
+	readJSON(t, resp, &secondPage)
+	if got := len(secondPage.Items); got != 1 {
+		t.Fatalf("second page item count = %d, want 1", got)
+	}
+	if secondPage.NextCursor != nil {
+		t.Fatalf("second page next_cursor = %q, want nil", *secondPage.NextCursor)
 	}
 }
 

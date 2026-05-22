@@ -1,15 +1,30 @@
-import type { QueryClient } from "@tanstack/react-query";
-import { inboxKeys } from "./queries";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
+import { inboxKeys, mapInboxPages } from "./queries";
 import type { InboxItem, IssueStatus } from "../types";
+import type { InboxPage } from "../types";
 
 export function onInboxNew(
   qc: QueryClient,
   wsId: string,
-  _item: InboxItem,
+  item: InboxItem,
 ) {
-  // Use invalidateQueries instead of setQueryData — triggers a refetch that
-  // reliably notifies all observers. The inbox list is small so this is cheap.
-  qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+  qc.setQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId), (old) => {
+    if (!old) {
+      return {
+        pages: [{ items: [item], next_cursor: null }],
+        pageParams: [null],
+      };
+    }
+    const pages = old.pages.map((page) => ({
+      ...page,
+      items: page.items.filter((i) => i.id !== item.id),
+    }));
+    const firstPage = pages[0] ?? { items: [], next_cursor: null };
+    return {
+      ...old,
+      pages: [{ ...firstPage, items: [item, ...firstPage.items] }, ...pages.slice(1)],
+    };
+  });
 }
 
 export function onInboxIssueStatusChanged(
@@ -18,8 +33,8 @@ export function onInboxIssueStatusChanged(
   issueId: string,
   status: IssueStatus,
 ) {
-  qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-    old?.map((i) =>
+  qc.setQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId), (old) =>
+    mapInboxPages(old, (i) =>
       i.issue_id === issueId ? { ...i, issue_status: status } : i,
     ),
   );
@@ -33,8 +48,8 @@ export function onInboxIssueDeleted(
   wsId: string,
   issueId: string,
 ) {
-  qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-    old?.filter((i) => i.issue_id !== issueId),
+  qc.setQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId), (old) =>
+    mapInboxPages(old, (i) => (i.issue_id === issueId ? null : i)),
   );
 }
 

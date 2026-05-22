@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -32,6 +35,11 @@ type InboxItemResponse struct {
 	Details       json.RawMessage `json:"details"`
 }
 
+type InboxPageResponse struct {
+	Items      []InboxItemResponse `json:"items"`
+	NextCursor *string             `json:"next_cursor"`
+}
+
 func inboxToResponse(i db.InboxItem) InboxItemResponse {
 	return InboxItemResponse{
 		ID:            uuidToString(i.ID),
@@ -52,7 +60,7 @@ func inboxToResponse(i db.InboxItem) InboxItemResponse {
 	}
 }
 
-func inboxRowToResponse(r db.ListInboxItemsRow) InboxItemResponse {
+func inboxRowToResponse(r db.ListInboxItemsPageRow) InboxItemResponse {
 	return InboxItemResponse{
 		ID:            uuidToString(r.ID),
 		WorkspaceID:   uuidToString(r.WorkspaceID),
@@ -85,6 +93,11 @@ func (h *Handler) enrichInboxResponse(ctx context.Context, resp InboxItemRespons
 	return resp
 }
 
+const (
+	defaultInboxPageLimit = 50
+	maxInboxPageLimit     = 100
+)
+
 func (h *Handler) ListInbox(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -96,22 +109,79 @@ func (h *Handler) ListInbox(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := h.Queries.ListInboxItems(r.Context(), db.ListInboxItemsParams{
-		WorkspaceID:   wsUUID,
-		RecipientType: "member",
-		RecipientID:   parseUUID(userID),
+	limit := defaultInboxPageLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+	if limit > maxInboxPageLimit {
+		limit = maxInboxPageLimit
+	}
+
+	var beforeCreatedAt pgtype.Timestamptz
+	var beforeID pgtype.UUID
+	if raw := r.URL.Query().Get("cursor"); raw != "" {
+		createdAt, id, ok := parseInboxCursor(w, raw)
+		if !ok {
+			return
+		}
+		beforeCreatedAt = pgtype.Timestamptz{Time: createdAt, Valid: true}
+		beforeID = id
+	}
+
+	rows, err := h.Queries.ListInboxItemsPage(r.Context(), db.ListInboxItemsPageParams{
+		WorkspaceID:     wsUUID,
+		RecipientType:   "member",
+		RecipientID:     parseUUID(userID),
+		BeforeCreatedAt: beforeCreatedAt,
+		BeforeID:        beforeID,
+		Limit:           int32(limit + 1),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list inbox")
 		return
 	}
 
-	resp := make([]InboxItemResponse, len(items))
-	for i, item := range items {
-		resp[i] = inboxRowToResponse(item)
+	var nextCursor *string
+	if len(rows) > limit {
+		last := rows[limit-1]
+		cursor := formatInboxCursor(last.CreatedAt, last.ID)
+		nextCursor = &cursor
+		rows = rows[:limit]
 	}
 
-	writeJSON(w, http.StatusOK, resp)
+	items := make([]InboxItemResponse, len(rows))
+	for i, item := range rows {
+		items[i] = inboxRowToResponse(item)
+	}
+
+	writeJSON(w, http.StatusOK, InboxPageResponse{Items: items, NextCursor: nextCursor})
+}
+
+func parseInboxCursor(w http.ResponseWriter, raw string) (time.Time, pgtype.UUID, bool) {
+	createdAtRaw, idRaw, found := strings.Cut(raw, "_")
+	if !found || createdAtRaw == "" || idRaw == "" {
+		writeError(w, http.StatusBadRequest, "invalid cursor")
+		return time.Time{}, pgtype.UUID{}, false
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, createdAtRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid cursor")
+		return time.Time{}, pgtype.UUID{}, false
+	}
+	id, ok := parseUUIDOrBadRequest(w, idRaw, "cursor id")
+	if !ok {
+		return time.Time{}, pgtype.UUID{}, false
+	}
+	return createdAt, id, true
+}
+
+func formatInboxCursor(createdAt pgtype.Timestamptz, id pgtype.UUID) string {
+	return createdAt.Time.Format(time.RFC3339Nano) + "_" + uuidToString(id)
 }
 
 func (h *Handler) MarkInboxRead(w http.ResponseWriter, r *http.Request) {
