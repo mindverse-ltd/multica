@@ -89,6 +89,17 @@ The tighter of the two wins. If your daemon is already running 20 tasks, new tas
 
 If you see tasks stuck in `queued` without moving to `dispatched`, one of these two limits is usually saturated.
 
+## Tuning task timeouts
+
+The daemon has its own execution limits before the server-side task sweeper gets involved:
+
+| Setting | Default | CLI flag | Environment variable |
+|---|---|---|---|
+| Overall agent execution timeout | **2 hours** | `--agent-timeout` | `MULTICA_AGENT_TIMEOUT` |
+| Codex semantic inactivity timeout | **10 minutes** | `--codex-semantic-inactivity-timeout` | `MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT` |
+
+The Codex timeout is provider-specific. It fires when Codex stops emitting meaningful progress; a still-running terminal command is treated as active work. If a Codex run fails around 10 minutes with a message like `codex semantic inactivity timeout`, raise `MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT` on the machine running the daemon and restart the daemon.
+
 ## What happens to in-flight tasks after a daemon crash
 
 When the daemon crashes or is force-killed, the tasks it had picked up are left in `dispatched` or `running`. On the next start, the daemon tells the server: "these tasks are no longer mine, please mark them failed." The server flips them to `failed` with reason `runtime_recovery` — for retryable sources, the tasks are automatically requeued.

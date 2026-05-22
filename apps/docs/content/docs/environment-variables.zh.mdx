@@ -138,6 +138,8 @@ Multica 存储用户上传的附件（评论里的图片、文件等）。**优�
 | `MULTICA_DAEMON_HEARTBEAT_INTERVAL` | `15s` | 心跳频率 |
 | `MULTICA_DAEMON_POLL_INTERVAL` | `3s` | 任务轮询频率 |
 | `MULTICA_DAEMON_MAX_CONCURRENT_TASKS` | `20` | 并发任务上限 |
+| `MULTICA_AGENT_TIMEOUT` | `2h` | 单个 agent 任务的整体超时 |
+| `MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT` | `10m` | Codex 专用的语义无进展 watchdog；长时间运行的 terminal 命令会被视为有效工作 |
 | `MULTICA_<PROVIDER>_PATH` | 对应 CLI 名 | 各 AI 编程工具的可执行文件路径（如 `MULTICA_CLAUDE_PATH`）|
 | `MULTICA_<PROVIDER>_MODEL` | 空 | 各 AI 编程工具的默认模型 |
 
