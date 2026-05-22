@@ -22,6 +22,7 @@ export function useMarkInboxRead() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
     },
   });
 }
@@ -51,6 +52,7 @@ export function useArchiveInbox() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
     },
   });
 }
@@ -75,6 +77,7 @@ export function useMarkAllInboxRead() {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
     },
   });
 }
@@ -86,6 +89,7 @@ export function useArchiveAllInbox() {
     mutationFn: () => api.archiveAllInbox(),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
     },
   });
 }
@@ -97,6 +101,7 @@ export function useArchiveAllReadInbox() {
     mutationFn: () => api.archiveAllReadInbox(),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
     },
   });
 }
@@ -108,6 +113,7 @@ export function useArchiveCompletedInbox() {
     mutationFn: () => api.archiveCompletedInbox(),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
     },
   });
 }
