@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   Eye,
   EyeOff,
+  FileText,
   Loader2,
   Lock,
   Plus,
@@ -13,6 +14,7 @@ import {
 import type { Agent } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useT } from "../../../i18n";
 
@@ -23,6 +25,12 @@ interface EnvEntry {
   key: string;
   value: string;
   visible: boolean;
+}
+
+export interface EnvParseResult {
+  entries: Array<{ key: string; value: string }>;
+  invalidLines: number[];
+  duplicateKeys: string[];
 }
 
 function envMapToEntries(env: Record<string, string>): EnvEntry[] {
@@ -45,6 +53,49 @@ function entriesToEnvMap(entries: EnvEntry[]): Record<string, string> {
   return map;
 }
 
+function entryWithKey(key: string, value: string): EnvEntry {
+  return {
+    id: nextEnvId++,
+    key,
+    value,
+    visible: false,
+  };
+}
+
+export function parseEnvText(text: string): EnvParseResult {
+  const entries: Array<{ key: string; value: string }> = [];
+  const invalidLines: number[] = [];
+  const seenKeys = new Set<string>();
+  const duplicateKeys = new Set<string>();
+
+  text.split(/\r?\n/).forEach((rawLine, index) => {
+    const line = rawLine.trim();
+    if (!line) {
+      return;
+    }
+
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex <= 0) {
+      invalidLines.push(index + 1);
+      return;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    if (!key || /\s/.test(key)) {
+      invalidLines.push(index + 1);
+      return;
+    }
+
+    if (seenKeys.has(key)) {
+      duplicateKeys.add(key);
+    }
+    seenKeys.add(key);
+    entries.push({ key, value: line.slice(separatorIndex + 1) });
+  });
+
+  return { entries, invalidLines, duplicateKeys: Array.from(duplicateKeys) };
+}
+
 export function EnvTab({
   agent,
   readOnly = false,
@@ -60,6 +111,7 @@ export function EnvTab({
   const [envEntries, setEnvEntries] = useState<EnvEntry[]>(
     envMapToEntries(agent.custom_env ?? {}),
   );
+  const [bulkText, setBulkText] = useState("");
   const [saving, setSaving] = useState(false);
 
   const currentEnvMap = entriesToEnvMap(envEntries);
@@ -100,6 +152,53 @@ export function EnvTab({
         i === index ? { ...entry, visible: !entry.visible } : entry,
       ),
     );
+  };
+
+  const handleBulkApply = () => {
+    const result = parseEnvText(bulkText);
+    if (result.invalidLines.length > 0) {
+      toast.error(
+        t(($) => $.tab_body.env.bulk_invalid_toast, {
+          lines: result.invalidLines.join(", "),
+        }),
+      );
+      return;
+    }
+    if (result.duplicateKeys.length > 0) {
+      toast.error(
+        t(($) => $.tab_body.env.bulk_duplicate_toast, {
+          keys: result.duplicateKeys.join(", "),
+        }),
+      );
+      return;
+    }
+    if (result.entries.length === 0) {
+      return;
+    }
+
+    const nextEntries: EnvEntry[] = [...envEntries];
+    for (const parsedEntry of result.entries) {
+      const existingIndex = nextEntries.findIndex(
+        (entry) => entry.key.trim() === parsedEntry.key,
+      );
+      if (existingIndex >= 0) {
+        const existingEntry = nextEntries[existingIndex];
+        if (!existingEntry) {
+          continue;
+        }
+        nextEntries[existingIndex] = {
+          id: existingEntry.id,
+          key: parsedEntry.key,
+          value: parsedEntry.value,
+          visible: existingEntry.visible,
+        };
+      } else {
+        nextEntries.push(entryWithKey(parsedEntry.key, parsedEntry.value));
+      }
+    }
+
+    setEnvEntries(nextEntries);
+    setBulkText("");
   };
 
   const handleSave = async () => {
@@ -181,6 +280,36 @@ export function EnvTab({
           <Plus className="h-3 w-3" />
           {t(($) => $.tab_body.common.add)}
         </Button>
+      </div>
+
+      <div className="space-y-2 rounded-md border border-dashed bg-muted/20 p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1">
+            <div className="text-xs font-medium">
+              {t(($) => $.tab_body.env.bulk_title)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.tab_body.env.bulk_hint)}
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleBulkApply}
+            disabled={!bulkText.trim()}
+            className="shrink-0"
+          >
+            <FileText className="h-3.5 w-3.5" />
+            {t(($) => $.tab_body.env.bulk_apply)}
+          </Button>
+        </div>
+        <Textarea
+          value={bulkText}
+          onChange={(e) => setBulkText(e.target.value)}
+          placeholder={t(($) => $.tab_body.env.bulk_placeholder)}
+          className="min-h-24 font-mono text-xs"
+        />
       </div>
 
       {envEntries.length > 0 && (
