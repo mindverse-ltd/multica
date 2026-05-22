@@ -6,6 +6,7 @@ import type {
   Attachment,
   CreateAgentFromTemplateResponse,
   GroupedIssuesResponse,
+  InboxPage,
   ListIssuesResponse,
   TimelineEntry,
 } from "../types";
@@ -195,6 +196,35 @@ export const SubscribersListSchema = z.array(SubscriberSchema);
 export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
 }).loose();
+
+const InboxItemSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  recipient_type: z.string(),
+  recipient_id: z.string(),
+  actor_type: z.string().nullable().optional(),
+  actor_id: z.string().nullable().optional(),
+  type: z.string(),
+  severity: z.string(),
+  issue_id: z.string().nullable().optional(),
+  title: z.string(),
+  body: z.string().nullable().optional(),
+  issue_status: z.string().nullable().optional(),
+  read: z.boolean().default(false),
+  archived: z.boolean().default(false),
+  created_at: z.string(),
+  details: z.record(z.string(), z.unknown()).nullable().optional(),
+}).loose();
+
+export const InboxPageSchema = z.object({
+  items: z.array(InboxItemSchema).default([]),
+  next_cursor: z.string().nullable().default(null),
+}).loose();
+
+export const EMPTY_INBOX_PAGE: InboxPage = {
+  items: [],
+  next_cursor: null,
+};
 
 // ---------------------------------------------------------------------------
 // Workspace dashboard schemas

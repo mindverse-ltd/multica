@@ -1,13 +1,13 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Focus } from "lucide-react";
 import type { ContextAnchor } from "@multica/core/chat";
 import { useChatStore } from "@multica/core/chat";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
-import { inboxListOptions } from "@multica/core/inbox/queries";
+import { getInboxItemsFromPages, inboxListOptions } from "@multica/core/inbox/queries";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Tooltip,
@@ -58,10 +58,11 @@ export function useRouteAnchorCandidate(wsId: string): {
     : null;
 
   // Inbox: the anchor is the issue behind the currently selected notification.
-  const { data: inboxItems = [] } = useQuery({
+  const { data: inboxPages } = useInfiniteQuery({
     ...inboxListOptions(wsId),
     enabled: isInbox,
   });
+  const inboxItems = getInboxItemsFromPages(inboxPages);
   const inboxKey = isInbox ? searchParams.get("issue") : null;
   const inboxSelectedIssueId =
     isInbox && inboxKey

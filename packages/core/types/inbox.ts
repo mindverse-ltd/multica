@@ -39,3 +39,8 @@ export interface InboxItem {
   created_at: string;
   details: Record<string, string> | null;
 }
+
+export interface InboxPage {
+  items: InboxItem[];
+  next_cursor: string | null;
+}

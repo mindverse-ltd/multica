@@ -1,8 +1,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
-import { inboxKeys } from "./queries";
+import {
+  archiveInboxItemInPages,
+  inboxKeys,
+  markAllInboxReadInPages,
+  markInboxItemReadInPages,
+} from "./queries";
 import { useWorkspaceId } from "../hooks";
-import type { InboxItem } from "../types";
+import type { InfiniteData } from "@tanstack/react-query";
+import type { InboxPage } from "../types";
 
 export function useMarkInboxRead() {
   const qc = useQueryClient();
@@ -11,9 +17,9 @@ export function useMarkInboxRead() {
     mutationFn: (id: string) => api.markInboxRead(id),
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) => (item.id === id ? { ...item, read: true } : item)),
+      const prev = qc.getQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId));
+      qc.setQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId), (old) =>
+        markInboxItemReadInPages(old, id),
       );
       return { prev };
     },
@@ -33,16 +39,9 @@ export function useArchiveInbox() {
     mutationFn: (id: string) => api.archiveInbox(id),
     onMutate: async (id) => {
       await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-      // Archive all items for the same issue (same behavior as store)
-      const target = prev?.find((i) => i.id === id);
-      const issueId = target?.issue_id;
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) =>
-          item.id === id || (issueId && item.issue_id === issueId)
-            ? { ...item, archived: true }
-            : item,
-        ),
+      const prev = qc.getQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId));
+      qc.setQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId), (old) =>
+        archiveInboxItemInPages(old, id),
       );
       return { prev };
     },
@@ -62,11 +61,9 @@ export function useMarkAllInboxRead() {
     mutationFn: () => api.markAllInboxRead(),
     onMutate: async () => {
       await qc.cancelQueries({ queryKey: inboxKeys.list(wsId) });
-      const prev = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
-      qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
-        old?.map((item) =>
-          !item.archived ? { ...item, read: true } : item,
-        ),
+      const prev = qc.getQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId));
+      qc.setQueryData<InfiniteData<InboxPage>>(inboxKeys.list(wsId), (old) =>
+        markAllInboxReadInPages(old),
       );
       return { prev };
     },

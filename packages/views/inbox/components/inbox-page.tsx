@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useDefaultLayout } from "react-resizable-panels";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
@@ -10,6 +10,7 @@ import { useIssueDraftStore } from "@multica/core/issues/stores/draft-store";
 import {
   inboxListOptions,
   deduplicateInboxItems,
+  getInboxItemsFromPages,
   useInboxUnreadCount,
 } from "@multica/core/inbox/queries";
 import {
@@ -70,7 +71,14 @@ export function InboxPage() {
   }, [urlIssue]);
 
   const wsId = useWorkspaceId();
-  const { data: rawItems = [], isLoading: loading } = useQuery(inboxListOptions(wsId));
+  const {
+    data: inboxPages,
+    isLoading: loading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery(inboxListOptions(wsId));
+  const rawItems = useMemo(() => getInboxItemsFromPages(inboxPages), [inboxPages]);
   const items = useMemo(() => deduplicateInboxItems(rawItems), [rawItems]);
 
   const selected = items.find((i) => (i.issue_id ?? i.id) === selectedKey) ?? null;
@@ -237,6 +245,22 @@ export function InboxPage() {
     </PageHeader>
   );
 
+  const loadMoreButton = hasNextPage ? (
+    <div className="px-2 py-3">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="w-full text-muted-foreground"
+        disabled={isFetchingNextPage}
+        onClick={() => fetchNextPage()}
+      >
+        {isFetchingNextPage
+          ? t(($) => $.list.loading_more)
+          : t(($) => $.list.load_more)}
+      </Button>
+    </div>
+  ) : null;
+
   const listBody = items.length === 0 ? (
     <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
       <Inbox className="mb-3 h-8 w-8 text-muted-foreground/50" />
@@ -253,6 +277,7 @@ export function InboxPage() {
           onArchive={() => handleArchive(item.id)}
         />
       ))}
+      {loadMoreButton}
     </div>
   );
 

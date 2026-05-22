@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -15,15 +16,18 @@ import (
 // (testPool, testUserID, testWorkspaceID are set in integration_test.go).
 
 // inboxItemsForRecipient returns all non-archived inbox items for a given recipient.
-func inboxItemsForRecipient(t *testing.T, queries *db.Queries, recipientID string) []db.ListInboxItemsRow {
+func inboxItemsForRecipient(t *testing.T, queries *db.Queries, recipientID string) []db.ListInboxItemsPageRow {
 	t.Helper()
-	items, err := queries.ListInboxItems(context.Background(), db.ListInboxItemsParams{
-		WorkspaceID:   util.MustParseUUID(testWorkspaceID),
-		RecipientType: "member",
-		RecipientID:   util.MustParseUUID(recipientID),
+	items, err := queries.ListInboxItemsPage(context.Background(), db.ListInboxItemsPageParams{
+		WorkspaceID:     util.MustParseUUID(testWorkspaceID),
+		RecipientType:   "member",
+		RecipientID:     util.MustParseUUID(recipientID),
+		BeforeCreatedAt: pgtype.Timestamptz{},
+		BeforeID:        pgtype.UUID{},
+		Limit:           1000,
 	})
 	if err != nil {
-		t.Fatalf("ListInboxItems: %v", err)
+		t.Fatalf("ListInboxItemsPage: %v", err)
 	}
 	return items
 }
@@ -439,8 +443,8 @@ func TestNotification_AssigneeChanged(t *testing.T) {
 				AssigneeType: &newAssigneeType,
 				AssigneeID:   &newAssigneeID,
 			},
-			"assignee_changed":  true,
-			"status_changed":    false,
+			"assignee_changed":   true,
+			"status_changed":     false,
 			"prev_assignee_type": &oldAssigneeType,
 			"prev_assignee_id":   &oldAssigneeID,
 		},
