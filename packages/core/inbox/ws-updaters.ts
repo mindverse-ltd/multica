@@ -10,6 +10,7 @@ export function onInboxNew(
   // Use invalidateQueries instead of setQueryData — triggers a refetch that
   // reliably notifies all observers. The inbox list is small so this is cheap.
   qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+  qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
 }
 
 export function onInboxIssueStatusChanged(
@@ -23,6 +24,7 @@ export function onInboxIssueStatusChanged(
       i.issue_id === issueId ? { ...i, issue_status: status } : i,
     ),
   );
+  qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
 }
 
 // Mirrors the DB-level ON DELETE CASCADE on inbox_item.issue_id: when an issue
@@ -36,8 +38,10 @@ export function onInboxIssueDeleted(
   qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), (old) =>
     old?.filter((i) => i.issue_id !== issueId),
   );
+  qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
 }
 
 export function onInboxInvalidate(qc: QueryClient, wsId: string) {
   qc.invalidateQueries({ queryKey: inboxKeys.list(wsId) });
+  qc.invalidateQueries({ queryKey: inboxKeys.unreadCount(wsId) });
 }

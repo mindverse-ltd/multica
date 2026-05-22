@@ -33,6 +33,38 @@ describe("ApiClient", () => {
     }
   });
 
+  describe("getUnreadInboxCount", () => {
+    it("parses unread-count responses", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ count: 4 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.getUnreadInboxCount()).resolves.toEqual({ count: 4 });
+    });
+
+    it("falls back to zero when unread-count response is malformed", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ count: "4" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.getUnreadInboxCount()).resolves.toEqual({ count: 0 });
+    });
+  });
+
   it("uses the expected HTTP contract for autopilot endpoints", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
       new Response(JSON.stringify({ autopilots: [], runs: [], total: 0 }), {

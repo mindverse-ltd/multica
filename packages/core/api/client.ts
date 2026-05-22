@@ -120,10 +120,12 @@ import {
   EMPTY_GROUPED_ISSUES_RESPONSE,
   EMPTY_LIST_ISSUES_RESPONSE,
   EMPTY_TIMELINE_ENTRIES,
+  EMPTY_UNREAD_INBOX_COUNT,
   GroupedIssuesResponseSchema,
   ListIssuesResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
+  UnreadInboxCountSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -1065,7 +1067,10 @@ export class ApiClient {
   }
 
   async getUnreadInboxCount(): Promise<{ count: number }> {
-    return this.fetch("/api/inbox/unread-count");
+    const raw = await this.fetch<unknown>("/api/inbox/unread-count");
+    return parseWithFallback(raw, UnreadInboxCountSchema, EMPTY_UNREAD_INBOX_COUNT, {
+      endpoint: "GET /api/inbox/unread-count",
+    });
   }
 
   async markAllInboxRead(): Promise<{ count: number }> {

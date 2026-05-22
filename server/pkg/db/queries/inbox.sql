@@ -42,7 +42,11 @@ WHERE workspace_id = $1 AND issue_id = $2 AND type = $3 AND archived = false
 RETURNING recipient_type, recipient_id;
 
 -- name: CountUnreadInbox :one
-SELECT count(*) FROM inbox_item
+-- Counts unread inbox items with the same issue-level dedupe semantics as
+-- deduplicateInboxItems: non-NULL issue_id values count once per issue, while
+-- NULL issue_id rows count individually.
+SELECT count(DISTINCT issue_id) + count(*) FILTER (WHERE issue_id IS NULL)
+FROM inbox_item
 WHERE workspace_id = $1 AND recipient_type = $2 AND recipient_id = $3 AND read = false AND archived = false;
 
 -- name: MarkAllInboxRead :execrows

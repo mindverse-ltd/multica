@@ -5,6 +5,8 @@ import type { InboxItem } from "../types";
 export const inboxKeys = {
   all: (wsId: string) => ["inbox", wsId] as const,
   list: (wsId: string) => [...inboxKeys.all(wsId), "list"] as const,
+  unreadCount: (wsId: string) =>
+    [...inboxKeys.all(wsId), "unread-count"] as const,
 };
 
 export function inboxListOptions(wsId: string) {
@@ -21,11 +23,10 @@ export function inboxListOptions(wsId: string) {
  */
 export function useInboxUnreadCount(wsId: string | null | undefined): number {
   const { data } = useQuery({
-    queryKey: inboxKeys.list(wsId ?? ""),
-    queryFn: () => api.listInbox(),
+    queryKey: inboxKeys.unreadCount(wsId ?? ""),
+    queryFn: () => api.getUnreadInboxCount(),
     enabled: !!wsId,
-    select: (items: InboxItem[]) =>
-      deduplicateInboxItems(items).filter((i) => !i.read).length,
+    select: (result) => result.count,
   });
   return data ?? 0;
 }

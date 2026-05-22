@@ -85,6 +85,12 @@ export const EMPTY_ATTACHMENT: Attachment = {
   created_at: "",
 };
 
+export const UnreadInboxCountSchema = z.object({
+  count: z.number(),
+}).loose();
+
+export const EMPTY_UNREAD_INBOX_COUNT = { count: 0 };
+
 // All object schemas use `.loose()` so unknown server-side fields pass
 // through unchanged. zod 4's `.object()` defaults to STRIP, which would
 // silently drop new fields and surface as a "field neither showed up in
