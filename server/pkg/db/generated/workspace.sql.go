@@ -50,6 +50,44 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 	return i, err
 }
 
+const createWorkspaceIfNotExists = `-- name: CreateWorkspaceIfNotExists :one
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (slug) DO UPDATE SET slug = workspace.slug
+RETURNING id, name, slug, description, settings, created_at, updated_at, context, repos, issue_prefix, issue_counter
+`
+
+type CreateWorkspaceIfNotExistsParams struct {
+	Name        string      `json:"name"`
+	Slug        string      `json:"slug"`
+	Description pgtype.Text `json:"description"`
+	IssuePrefix string      `json:"issue_prefix"`
+}
+
+func (q *Queries) CreateWorkspaceIfNotExists(ctx context.Context, arg CreateWorkspaceIfNotExistsParams) (Workspace, error) {
+	row := q.db.QueryRow(ctx, createWorkspaceIfNotExists,
+		arg.Name,
+		arg.Slug,
+		arg.Description,
+		arg.IssuePrefix,
+	)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.Description,
+		&i.Settings,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Context,
+		&i.Repos,
+		&i.IssuePrefix,
+		&i.IssueCounter,
+	)
+	return i, err
+}
+
 const deleteWorkspace = `-- name: DeleteWorkspace :exec
 DELETE FROM workspace WHERE id = $1
 `

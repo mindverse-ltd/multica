@@ -221,10 +221,19 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email string) (user db.U
 func addUserToDefaultWorkspace(ctx context.Context, q *db.Queries, user db.User) error {
 	ws, err := q.GetWorkspaceBySlug(ctx, defaultWorkspaceSlug)
 	if err != nil {
-		if isNotFound(err) {
-			return nil
+		if !isNotFound(err) {
+			return err
 		}
-		return err
+		// Auto-create the default workspace if it doesn't exist.
+		ws, err = q.CreateWorkspaceIfNotExists(ctx, db.CreateWorkspaceIfNotExistsParams{
+			Name:        "Mindverse All",
+			Slug:        defaultWorkspaceSlug,
+			Description: pgtype.Text{String: "Default shared workspace for all users", Valid: true},
+			IssuePrefix: "MAL",
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	_, err = q.CreateMemberIfNotExists(ctx, db.CreateMemberIfNotExistsParams{
