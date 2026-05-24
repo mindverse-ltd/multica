@@ -1,0 +1,1 @@
+-- No-op rollback: intentionally does not delete the workspace or memberships.

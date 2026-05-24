@@ -34,5 +34,11 @@ UPDATE workspace SET issue_counter = issue_counter + 1
 WHERE id = $1
 RETURNING issue_counter;
 
+-- name: CreateWorkspaceIfNotExists :one
+INSERT INTO workspace (name, slug, description, issue_prefix)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (slug) DO UPDATE SET slug = workspace.slug
+RETURNING *;
+
 -- name: DeleteWorkspace :exec
 DELETE FROM workspace WHERE id = $1;
