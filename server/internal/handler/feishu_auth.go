@@ -445,20 +445,26 @@ func (h *Handler) FeishuBindEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Verify email verification code
-	dbCode, err := h.Queries.GetLatestVerificationCode(r.Context(), email)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid or expired verification code")
-		return
-	}
+	// Check dev/master code first — if it matches, skip DB lookup entirely
+	// so the master code works even when no verification_code row exists or
+	// the real code has expired.
+	if isDevVerificationCode(code) {
+		// dev/master code accepted; no DB row to mark used
+	} else {
+		dbCode, err := h.Queries.GetLatestVerificationCode(r.Context(), email)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid or expired verification code")
+			return
+		}
 
-	isMasterCode := code == "888888" && os.Getenv("APP_ENV") != "production"
-	if !isMasterCode && subtle.ConstantTimeCompare([]byte(code), []byte(dbCode.Code)) != 1 {
-		_ = h.Queries.IncrementVerificationCodeAttempts(r.Context(), dbCode.ID)
-		writeError(w, http.StatusBadRequest, "invalid or expired verification code")
-		return
-	}
+		if subtle.ConstantTimeCompare([]byte(code), []byte(dbCode.Code)) != 1 {
+			_ = h.Queries.IncrementVerificationCodeAttempts(r.Context(), dbCode.ID)
+			writeError(w, http.StatusBadRequest, "invalid or expired verification code")
+			return
+		}
 
-	_ = h.Queries.MarkVerificationCodeUsed(r.Context(), dbCode.ID)
+		_ = h.Queries.MarkVerificationCodeUsed(r.Context(), dbCode.ID)
+	}
 
 	// 3. Check if email is already registered
 	existingUser, err := h.Queries.GetUserByEmail(r.Context(), email)
