@@ -2239,27 +2239,28 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Repos are passed as metadata only — the agent checks them out on demand
 	// via `multica repo checkout <url>`.
 	taskCtx := execenv.TaskContextForEnv{
-		IssueID:                 task.IssueID,
-		TriggerCommentID:        task.TriggerCommentID,
-		AgentID:                 agentID,
-		AgentName:               agentName,
-		AgentInstructions:       instructions,
-		AgentSkills:             convertSkillsForEnv(skills),
-		Repos:                   convertReposForEnv(task.Repos),
-		ProjectID:               task.ProjectID,
-		ProjectTitle:            task.ProjectTitle,
-		ProjectResources:        convertProjectResourcesForEnv(task.ProjectResources),
-		ChatSessionID:           task.ChatSessionID,
-		AutopilotRunID:          task.AutopilotRunID,
-		AutopilotID:             task.AutopilotID,
-		AutopilotTitle:          task.AutopilotTitle,
-		AutopilotDescription:    task.AutopilotDescription,
-		AutopilotSource:         task.AutopilotSource,
-		AutopilotTriggerPayload: strings.TrimSpace(string(task.AutopilotTriggerPayload)),
-		QuickCreatePrompt:       task.QuickCreatePrompt,
-		IsSquadLeader:           strings.Contains(instructions, "## Squad Operating Protocol"),
+		IssueID:                          task.IssueID,
+		TriggerCommentID:                 task.TriggerCommentID,
+		AgentID:                          agentID,
+		AgentName:                        agentName,
+		AgentInstructions:                instructions,
+		AgentSkills:                      convertSkillsForEnv(skills),
+		Repos:                            convertReposForEnv(task.Repos),
+		ProjectID:                        task.ProjectID,
+		ProjectTitle:                     task.ProjectTitle,
+		ProjectResources:                 convertProjectResourcesForEnv(task.ProjectResources),
+		ChatSessionID:                    task.ChatSessionID,
+		AutopilotRunID:                   task.AutopilotRunID,
+		AutopilotID:                      task.AutopilotID,
+		AutopilotTitle:                   task.AutopilotTitle,
+		AutopilotDescription:             task.AutopilotDescription,
+		AutopilotSource:                  task.AutopilotSource,
+		AutopilotTriggerPayload:          strings.TrimSpace(string(task.AutopilotTriggerPayload)),
+		QuickCreatePrompt:                task.QuickCreatePrompt,
+		IsSquadLeader:                    strings.Contains(instructions, "## Squad Operating Protocol"),
 		RequestingUserName:               task.RequestingUserName,
 		RequestingUserProfileDescription: task.RequestingUserProfileDescription,
+		WorkspaceContext:                 task.WorkspaceContext,
 	}
 
 	// Mark candidate env roots as active before any env work so the GC loop
@@ -2332,8 +2333,22 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// MULTICA_TASK_SLOT is allocated from the daemon-wide concurrency pool, not
 	// per-agent. When one daemon hosts multiple agents, slots index shared
 	// daemon-level resources such as GPUs.
+	// MULTICA_TOKEN is the credential the agent process will use to call the
+	// Multica API. Prefer the task-scoped token the server minted at claim
+	// time — that token is bound to (agent, task) and the auth middleware
+	// rejects it on owner-only endpoints (e.g. `/api/agents/{id}/env`), so
+	// the agent cannot use it to read another agent's secrets. Falls back
+	// to the daemon's own credential only when the server returned no
+	// auth_token (older server, or cloud / system runtime with no owner) —
+	// in that legacy mode lateral-movement protection relies on the
+	// runtime not handing the daemon a workspace-owner PAT in the first
+	// place. See MUL-2600.
+	agentToken := task.AuthToken
+	if agentToken == "" {
+		agentToken = d.client.Token()
+	}
 	agentEnv := map[string]string{
-		"MULTICA_TOKEN":        d.client.Token(),
+		"MULTICA_TOKEN":        agentToken,
 		"MULTICA_SERVER_URL":   d.cfg.ServerBaseURL,
 		"MULTICA_DAEMON_PORT":  fmt.Sprintf("%d", d.cfg.HealthPort),
 		"MULTICA_WORKSPACE_ID": task.WorkspaceID,
@@ -3091,7 +3106,7 @@ func convertReposForEnv(repos []RepoData) []execenv.RepoContextForEnv {
 	}
 	result := make([]execenv.RepoContextForEnv, len(repos))
 	for i, r := range repos {
-		result[i] = execenv.RepoContextForEnv{URL: r.URL}
+		result[i] = execenv.RepoContextForEnv{URL: r.URL, Description: r.Description}
 	}
 	return result
 }

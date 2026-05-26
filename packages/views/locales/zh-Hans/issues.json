@@ -235,7 +235,9 @@
     "squad_leader_failed_reason": "评估失败：{{reason}}",
     "coalesced_badge": "×{{count}}",
     "activity_count_one": "{{count}} 条动态",
-    "activity_count_other": "{{count}} 条动态"
+    "activity_count_other": "{{count}} 条动态",
+    "show_more_activities_one": "展开更早 {{count}} 条动态",
+    "show_more_activities_other": "展开更早 {{count}} 条动态"
   },
   "comment": {
     "delete_title": "删除评论",
@@ -272,6 +274,14 @@
     "placeholder": "回复...",
     "expand_tooltip": "展开",
     "collapse_tooltip": "收起"
+  },
+  "agent_activity": {
+    "hover_header_other": "{{count}} 个智能体正在工作",
+    "status_running": "正在工作",
+    "status_queued": "排队中",
+    "chip_label": "工作中",
+    "empty_hover": "当前没有智能体在工作",
+    "filter_active_label": "正在查看工作中的智能体"
   },
   "agent_live": {
     "is_working": "{{name}} 正在处理",
@@ -332,7 +342,8 @@
     "cancel": "取消"
   },
   "card": {
-    "update_failed": "更新 issue 失败"
+    "update_failed": "更新 issue 失败",
+    "updated_ago": "更新于 {{time}}"
   },
   "actions": {
     "status": "状态",

@@ -1,11 +1,29 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enAgents from "../../../locales/en/agents.json";
 import { EnvTab, parseEnvText } from "./env-tab";
+
+const apiMocks = vi.hoisted(() => ({
+  getAgentEnv: vi.fn(),
+  updateAgentEnv: vi.fn(),
+}));
+
+vi.mock("@multica/core/api", () => ({
+  api: {
+    getAgentEnv: apiMocks.getAgentEnv,
+    updateAgentEnv: apiMocks.updateAgentEnv,
+  },
+}));
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -24,9 +42,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     avatar_url: null,
     runtime_mode: "local",
     runtime_config: {},
-    custom_env: {},
     custom_args: [],
-    custom_env_redacted: false,
     visibility: "private",
     status: "idle",
     max_concurrent_tasks: 1,
@@ -41,13 +57,13 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
   };
 }
 
-function renderEnvTab(agent: Agent, onSave = vi.fn().mockResolvedValue(undefined)) {
+function renderEnvTab(agent: Agent, onSaved = vi.fn()) {
   render(
     <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <EnvTab agent={agent} onSave={onSave} />
+      <EnvTab agent={agent} onSaved={onSaved} />
     </I18nProvider>,
   );
-  return { onSave };
+  return { onSaved };
 }
 
 describe("parseEnvText", () => {
@@ -81,19 +97,29 @@ describe("EnvTab bulk paste", () => {
     vi.clearAllMocks();
   });
 
-  it("updates existing keys, appends new keys, and saves the parsed map", () => {
-    const { onSave } = renderEnvTab(
-      makeAgent({ custom_env: { EXISTING: "old" } }),
-    );
+  it("updates existing keys, appends new keys, and saves the parsed map", async () => {
+    apiMocks.getAgentEnv.mockResolvedValue({
+      custom_env: { EXISTING: "old" },
+    });
+    apiMocks.updateAgentEnv.mockResolvedValue({
+      custom_env: { EXISTING: "new", ADDED: "value" },
+    });
 
-    fireEvent.change(screen.getByPlaceholderText(/ANTHROPIC_API_KEY/), {
+    const { onSaved } = renderEnvTab(makeAgent({ custom_env_key_count: 1 }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal & edit" }));
+
+    fireEvent.change(await screen.findByPlaceholderText(/ANTHROPIC_API_KEY/), {
       target: { value: "EXISTING=new\nADDED=value" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Parse" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(onSave).toHaveBeenCalledWith({
-      custom_env: { EXISTING: "new", ADDED: "value" },
+    await waitFor(() => {
+      expect(apiMocks.updateAgentEnv).toHaveBeenCalledWith("agent-1", {
+        custom_env: { EXISTING: "new", ADDED: "value" },
+      });
+      expect(onSaved).toHaveBeenCalledOnce();
     });
   });
 });

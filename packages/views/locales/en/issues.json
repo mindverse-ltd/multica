@@ -236,7 +236,9 @@
     "squad_leader_failed_reason": "evaluation failed: {{reason}}",
     "coalesced_badge": "×{{count}}",
     "activity_count_one": "{{count}} activity",
-    "activity_count_other": "{{count}} activities"
+    "activity_count_other": "{{count}} activities",
+    "show_more_activities_one": "Show {{count}} more activity",
+    "show_more_activities_other": "Show {{count}} more activities"
   },
   "comment": {
     "delete_title": "Delete comment",
@@ -276,6 +278,15 @@
     "placeholder": "Leave a reply...",
     "expand_tooltip": "Expand",
     "collapse_tooltip": "Collapse"
+  },
+  "agent_activity": {
+    "hover_header_one": "{{count}} agent working",
+    "hover_header_other": "{{count}} agents working",
+    "status_running": "Working",
+    "status_queued": "Queued",
+    "chip_label": "working",
+    "empty_hover": "No agents currently working",
+    "filter_active_label": "Viewing only working agents"
   },
   "agent_live": {
     "is_working": "{{name}} is working",
@@ -341,7 +352,8 @@
     "cancel": "Cancel"
   },
   "card": {
-    "update_failed": "Failed to update issue"
+    "update_failed": "Failed to update issue",
+    "updated_ago": "Updated {{time}}"
   },
   "actions": {
     "status": "Status",

@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -161,7 +162,7 @@ type DaemonRegisterRequest struct {
 	DeviceName      string   `json:"device_name"`
 	CLIVersion      string   `json:"cli_version"` // multica CLI version
 	LaunchedBy      string   `json:"launched_by"` // "desktop" when spawned by the Electron app
-	Runtimes []struct {
+	Runtimes        []struct {
 		Name    string `json:"name"`
 		Type    string `json:"type"`
 		Version string `json:"version"` // agent CLI version (claude/codex)
@@ -192,7 +193,7 @@ func normalizeWorkspaceRepos(repos []RepoData) []RepoData {
 			continue
 		}
 		seen[url] = struct{}{}
-		normalized = append(normalized, RepoData{URL: url})
+		normalized = append(normalized, RepoData{URL: url, Description: repo.Description})
 	}
 	return normalized
 }
@@ -1509,6 +1510,62 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Workspace-level Context (workspace.context DB column) — the per-workspace
+	// system prompt that workspace owners set in Settings → General. Inject it
+	// into the brief regardless of task kind (issue / chat / autopilot /
+	// quick-create) so every agent running in the workspace sees the same
+	// shared context. Empty string when the owner hasn't set one; the daemon
+	// skips rendering the heading in that case.
+	if ws, err := h.Queries.GetWorkspace(r.Context(), parseUUID(resp.WorkspaceID)); err == nil {
+		if ws.Context.Valid {
+			resp.WorkspaceContext = ws.Context.String
+		}
+	} else {
+		slog.Warn("task claim: failed to load workspace for context injection",
+			"task_id", uuidToString(task.ID),
+			"workspace_id", resp.WorkspaceID,
+			"error", err,
+		)
+	}
+
+	// Mint a task-scoped `mat_` token bound to (agent, task, workspace,
+	// owner). The daemon will inject this as MULTICA_TOKEN into the agent
+	// process instead of its own credential, so any API call the agent
+	// makes — even one that strips X-Agent-ID / X-Task-ID headers — is
+	// recognized server-side as actor=agent, closing the lateral-movement
+	// path on owner-only endpoints (e.g. `/api/agents/{id}/env`). MUL-2600.
+	//
+	// Skip silently when the runtime has no owning user (cloud / system
+	// runtimes installed before this PR) — the response carries no
+	// `auth_token`, and the daemon falls back to its existing credential.
+	// Token expires after the queue/runtime upper bound (24h) so it survives
+	// long-running tasks but cannot outlive a forgotten one.
+	if runtime.OwnerID.Valid {
+		tokenStr, terr := auth.GenerateAgentTaskToken()
+		if terr != nil {
+			outcome = "error_token"
+			slog.Error("task claim: failed to generate agent task token",
+				"task_id", uuidToString(task.ID), "error", terr)
+			writeError(w, http.StatusInternalServerError, "failed to mint task token")
+			return
+		}
+		if _, terr := h.Queries.CreateTaskToken(r.Context(), db.CreateTaskTokenParams{
+			TokenHash:   auth.HashToken(tokenStr),
+			TaskID:      task.ID,
+			AgentID:     task.AgentID,
+			WorkspaceID: parseUUID(resp.WorkspaceID),
+			UserID:      runtime.OwnerID,
+			ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
+		}); terr != nil {
+			outcome = "error_token"
+			slog.Error("task claim: failed to persist agent task token",
+				"task_id", uuidToString(task.ID), "error", terr)
+			writeError(w, http.StatusInternalServerError, "failed to persist task token")
+			return
+		}
+		resp.AuthToken = tokenStr
+	}
+
 	slog.Info("task claimed by runtime", "task_id", uuidToString(task.ID), "runtime_id", runtimeID, "agent_id", uuidToString(task.AgentID), "prior_session", resp.PriorSessionID)
 	writeJSON(w, http.StatusOK, map[string]any{"task": resp})
 }
@@ -1624,6 +1681,16 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.emitIssueExecutedOnFirstCompletion(r, task)
+
+	// Best-effort revoke of any agent task token minted at claim time.
+	// The token would naturally expire at the 24h watermark and is also
+	// cascaded on agent_task deletion, but eagerly deleting it on
+	// completion shrinks the window where a compromised agent process
+	// can keep making API calls after its task finishes. Failure here is
+	// non-fatal; the expiry / cascade are the durable guards.
+	if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
+		slog.Warn("complete task: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
+	}
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task))
@@ -1756,6 +1823,13 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("fail task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+
+	// Best-effort revoke of the mat_ task token minted at claim. Same
+	// rationale as CompleteTask — eager deletion shrinks the post-
+	// terminal window. The 24h expiry / cascade are the durable guards.
+	if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
+		slog.Warn("fail task: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)

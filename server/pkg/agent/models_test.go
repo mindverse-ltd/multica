@@ -288,12 +288,12 @@ func TestParsePiModelsTabularFormat(t *testing.T) {
 	// Actual output from pi v0.22.4+ (the format pi has used since
 	// --list-models was introduced in December 2025).
 	input := `provider  model                                       context  max-out  thinking  images
-doubao    glm-4.7                                     200K     131.1K   yes       no    
-doubao    kimi-k2.5                                   256K     131.1K   no        no    
-glm       glm-5.1                                     124.8K   131.1K   yes       no    
-google    gemini-2.5-pro                              1.0M     65.5K    yes       yes   
-openai    gpt-4o                                      128K     16.4K    no        yes   
-openai    gpt-4o                                      128K     16.4K    no        yes   
+doubao    glm-4.7                                     200K     131.1K   yes       no
+doubao    kimi-k2.5                                   256K     131.1K   no        no
+glm       glm-5.1                                     124.8K   131.1K   yes       no
+google    gemini-2.5-pro                              1.0M     65.5K    yes       yes
+openai    gpt-4o                                      128K     16.4K    no        yes
+openai    gpt-4o                                      128K     16.4K    no        yes
 `
 	models := parsePiModels(input)
 	if len(models) != 5 {
