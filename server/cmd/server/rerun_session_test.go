@@ -662,3 +662,31 @@ func TestEnqueueTaskForIssueDoesNotForceFreshSession(t *testing.T) {
 		t.Fatal("expected normal enqueue to leave force_fresh_session=false")
 	}
 }
+
+func TestEnqueueTaskForIssueDefaultMaxAttemptsIsThree(t *testing.T) {
+	if testPool == nil {
+		t.Skip("no database connection")
+	}
+
+	issueID, _, _ := setupRerunTestFixture(t)
+	t.Cleanup(func() { cleanupRerunFixture(t, issueID) })
+
+	ctx := context.Background()
+	queries := db.New(testPool)
+	hub := realtime.NewHub()
+	go hub.Run()
+	bus := events.New()
+	taskService := service.NewTaskService(queries, nil, hub, bus)
+
+	issue, err := queries.GetIssue(ctx, pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true})
+	if err != nil {
+		t.Fatalf("load issue: %v", err)
+	}
+	task, err := taskService.EnqueueTaskForIssue(ctx, issue)
+	if err != nil {
+		t.Fatalf("EnqueueTaskForIssue failed: %v", err)
+	}
+	if task.MaxAttempts != 3 {
+		t.Fatalf("expected default max_attempts=3, got %d", task.MaxAttempts)
+	}
+}

@@ -201,13 +201,18 @@ func (h *Handler) CreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// NOTE: CreateWorkspace deliberately does NOT mark the user as
-	// onboarded. The `onboarded_at` flag is owned by CompleteOnboarding
-	// (Step 3 of the flow) and by AcceptInvitation (invitee joining an
-	// existing workspace). This decouples "the user has a workspace"
-	// from "the user has finished setup"; the workspace-layer route
-	// gate (web layout / desktop App.tsx overlay) redirects un-onboarded
-	// users back to /onboarding instead.
+	if err := addUserToDefaultWorkspace(r.Context(), qtx, db.User{ID: parseUUID(userID)}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add default workspace")
+		return
+	}
+
+	// Company self-host keeps workspace creation as the physical event that
+	// completes onboarding, matching the default-workspace membership update
+	// above and avoiding a post-create onboarding loop.
+	if _, err := qtx.MarkUserOnboarded(r.Context(), parseUUID(userID)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark user onboarded")
+		return
+	}
 
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create workspace")

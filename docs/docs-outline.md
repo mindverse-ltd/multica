@@ -500,7 +500,7 @@ multica issue assign <issue-id> --agent <agent-slug>
 - **写什么**（1500-2200 字）:
   - 状态机（queued → dispatched → running → completed/failed/cancelled）
   - `session_id` mid-flight pinning
-  - `attempt` / `max_attempts`（默认 2）
+  - `attempt` / `max_attempts`（默认 3）
   - **Retryable reasons**：runtime_offline / runtime_recovery / timeout
   - **Non-retryable**：agent_error / 手动失败
   - **自动重试仅对 issue-sourced 和 chat-sourced**——**Routines 任务不自动重试**

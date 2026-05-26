@@ -1285,6 +1285,7 @@ var retryableReasons = map[string]bool{
 	"runtime_offline":           true,
 	"runtime_recovery":          true,
 	"timeout":                   true,
+	"provider_capacity":         true,
 	"codex_semantic_inactivity": true,
 }
 

@@ -84,6 +84,7 @@ vi.mock("@multica/core/api", () => ({
   },
 }));
 
+import { configStore } from "@multica/core/config";
 import LoginPage from "./page";
 
 describe("LoginPage", () => {
@@ -92,28 +93,29 @@ describe("LoginPage", () => {
     searchParamsState.params = new URLSearchParams();
     authStateRef.state.user = null;
     authStateRef.state.isLoading = false;
+    configStore.getState().setAuthConfig({
+      allowSignup: true,
+      feishuAppId: "feishu-client-id",
+    });
   });
 
-  it("renders login form with email input and continue button", () => {
+  it("renders Feishu-only login without email entry", () => {
     render(<LoginPage />, { wrapper: createWrapper() });
 
     expect(screen.getByText("Sign in to Multica")).toBeInTheDocument();
-    expect(screen.getByText("Enter your email to get a login code")).toBeInTheDocument();
-    expect(screen.getByLabelText("Email")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Continue" })
+      screen.getByRole("button", { name: "Continue with Feishu" }),
     ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Enter your email to get a login code"),
+    ).not.toBeInTheDocument();
   });
 
-  it("does not call sendCode when email is empty", async () => {
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-    expect(mockSendCode).not.toHaveBeenCalled();
-  });
-
-  it("calls sendCode with email on submit", async () => {
+  it("keeps Feishu email binding and shows the default code hint", async () => {
+    searchParamsState.params = new URLSearchParams({
+      bind_email: "bind-session-token",
+    });
     mockSendCode.mockResolvedValueOnce(undefined);
     const user = userEvent.setup();
     render(<LoginPage />, { wrapper: createWrapper() });
@@ -123,45 +125,10 @@ describe("LoginPage", () => {
 
     await waitFor(() => {
       expect(mockSendCode).toHaveBeenCalledWith("test@multica.ai");
-    });
-  });
-
-  it("shows 'Sending code...' while submitting", async () => {
-    mockSendCode.mockReturnValueOnce(new Promise(() => {}));
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Sending code...")).toBeInTheDocument();
-    });
-  });
-
-  it("shows verification code step after sending code", async () => {
-    mockSendCode.mockResolvedValueOnce(undefined);
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
       expect(screen.getByText("Check your email")).toBeInTheDocument();
-    });
-  });
-
-  it("shows error when sendCode fails", async () => {
-    mockSendCode.mockRejectedValueOnce(new Error("Network error"));
-    const user = userEvent.setup();
-    render(<LoginPage />, { wrapper: createWrapper() });
-
-    await user.type(screen.getByLabelText("Email"), "test@multica.ai");
-    await user.click(screen.getByRole("button", { name: "Continue" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Network error")).toBeInTheDocument();
+      expect(
+        screen.getByText("当前测试环境默认验证码：888888"),
+      ).toBeInTheDocument();
     });
   });
 

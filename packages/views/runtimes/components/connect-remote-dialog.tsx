@@ -23,9 +23,11 @@ type Step = "instructions" | "success";
 
 const INSTALL_CMD =
   "curl -fsSL https://raw.githubusercontent.com/multica-ai/multica/main/scripts/install.sh | bash";
-const SETUP_CMD = "multica setup";
-const TOKEN_CMD = `multica config set server_url https://api.multica.ai
-multica config set app_url https://multica.ai
+const CONFIGURE_CMD = `multica config set server_url https://multica.macaron.xin
+multica config set app_url https://multica.macaron.xin`;
+const SETUP_CMD = `${CONFIGURE_CMD}
+multica setup`;
+const TOKEN_CMD = `${CONFIGURE_CMD}
 multica login --token <YOUR_TOKEN>
 multica daemon start`;
 

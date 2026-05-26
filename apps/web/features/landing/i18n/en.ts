@@ -21,7 +21,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     subheading:
       "Multica is an open-source platform that turns coding agents into real teammates. Assign tasks, track progress, compound skills \u2014 manage your human + agent workforce in one place.",
     cta: "Start free trial",
-    downloadDesktop: "Download Desktop",
+    downloadDesktop: "Set up CLI",
     talkToSales: "Talk to sales",
     worksWith: "Works with",
     imageAlt: "Multica board view \u2014 issues managed by humans and agents",
@@ -235,7 +235,6 @@ export function createEnDict(allowSignup: boolean): LandingDict {
           { label: "How it Works", href: "#how-it-works" },
           { label: "Use cases", href: "/usecases" },
           { label: "Changelog", href: "/changelog" },
-          { label: "Download", href: "/download" },
         ],
       },
       resources: {

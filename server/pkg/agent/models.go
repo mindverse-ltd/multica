@@ -404,11 +404,17 @@ func discoverPiModels(ctx context.Context, executablePath string) ([]Model, erro
 	return parsePiModels(text), nil
 }
 
-// parsePiModels accepts the `pi --list-models` output. Pi historically
-// emitted `provider:model` per line and now emits a multi-column table
-// (`provider  model  context …`); both shapes are normalized to
-// `provider/model` to match opencode/UI conventions. The case-insensitive
-// `provider` token in column 0 is treated as the table header and skipped.
+// parsePiModels accepts the `pi --list-models` output and extracts
+// model IDs. Pi prints a tabular format to stderr:
+//
+//	provider  model              context  max-out  thinking  images
+//	openai    gpt-4o             128K     16.4K    no         yes
+//	doubao    glm-4.7            200K     131.1K   yes        no
+//
+// Each data row has provider as the first field and model as the second;
+// we combine them into "provider/model" for UI consistency with opencode.
+// A legacy "provider:model" single-field format is also accepted so the
+// parser stays backward-compatible if pi's output format changes.
 func parsePiModels(output string) []Model {
 	scanner := bufio.NewScanner(strings.NewReader(output))
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -423,25 +429,28 @@ func parsePiModels(output string) []Model {
 		if len(fields) == 0 {
 			continue
 		}
-		first := fields[0]
-		if strings.EqualFold(first, "provider") {
+
+		// Skip the header row (first field is literally "provider").
+		if fields[0] == "provider" {
 			continue
 		}
+
 		var id string
-		if strings.ContainsAny(first, ":/") {
-			// Legacy `provider:model` format — normalize colon to slash.
-			// Restricted to this branch so a model name with a `:` in
-			// the table format's column 1 is not silently rewritten.
-			id = strings.Replace(first, ":", "/", 1)
-		} else if len(fields) >= 2 {
-			id = first + "/" + fields[1]
+		if len(fields) >= 2 {
+			// Tabular format: provider is field[0], model is field[1].
+			id = fields[0] + "/" + fields[1]
+		} else if strings.ContainsAny(fields[0], ":/") {
+			// Legacy single-field format: "provider:model".
+			id = strings.Replace(fields[0], ":", "/", 1)
 		} else {
 			continue
 		}
+
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
+
 		provider := ""
 		if i := strings.Index(id, "/"); i > 0 {
 			provider = id[:i]

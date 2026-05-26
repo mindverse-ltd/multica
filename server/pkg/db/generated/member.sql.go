@@ -36,6 +36,33 @@ func (q *Queries) CreateMember(ctx context.Context, arg CreateMemberParams) (Mem
 	return i, err
 }
 
+const createMemberIfNotExists = `-- name: CreateMemberIfNotExists :one
+INSERT INTO member (workspace_id, user_id, role)
+VALUES ($1, $2, $3)
+ON CONFLICT (workspace_id, user_id) DO UPDATE
+SET role = member.role
+RETURNING id, workspace_id, user_id, role, created_at
+`
+
+type CreateMemberIfNotExistsParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	Role        string      `json:"role"`
+}
+
+func (q *Queries) CreateMemberIfNotExists(ctx context.Context, arg CreateMemberIfNotExistsParams) (Member, error) {
+	row := q.db.QueryRow(ctx, createMemberIfNotExists, arg.WorkspaceID, arg.UserID, arg.Role)
+	var i Member
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const deleteMember = `-- name: DeleteMember :exec
 DELETE FROM member WHERE id = $1
 `

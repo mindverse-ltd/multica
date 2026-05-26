@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -79,6 +80,7 @@ func newDBPool(ctx context.Context, dbURL string) (*pgxpool.Pool, error) {
 	if cfg.MinConns > cfg.MaxConns {
 		cfg.MinConns = cfg.MaxConns
 	}
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
 
 	return pgxpool.NewWithConfig(ctx, cfg)
 }

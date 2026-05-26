@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+	"github.com/riandyrn/otelchi"
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -180,6 +181,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r := chi.NewRouter()
 
 	// Global middleware
+	r.Use(otelchi.Middleware("multica-backend", otelchi.WithChiRoutes(r)))
 	r.Use(chimw.RequestID)
 	r.Use(middleware.ClientMetadata)
 	r.Use(middleware.RequestLogger)
@@ -250,6 +252,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.With(authRL).Post("/auth/send-code", h.SendCode)
 	r.With(authVerifyRL).Post("/auth/verify-code", h.VerifyCode)
 	r.With(authRL).Post("/auth/google", h.GoogleLogin)
+	r.With(authRL).Post("/auth/feishu", h.FeishuLogin)
+	r.With(authVerifyRL).Post("/auth/feishu/bind", h.FeishuBindEmail)
 	r.Post("/auth/logout", h.Logout)
 
 	// Public API
@@ -323,6 +327,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/api/upload-file", h.UploadFile)
 		r.Post("/api/feedback", h.CreateFeedback)
 
+		// Admin routes (no workspace context required)
+		r.Get("/api/admin/users", h.ListAllUsers)
+
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
 			r.Post("/", h.CreateWorkspace)
@@ -350,6 +357,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Patch("/", h.UpdateMember)
 						r.Delete("/", h.DeleteMember)
 					})
+					r.Post("/members/by-user", h.CreateMemberByUserID)
 					r.Delete("/invitations/{invitationId}", h.RevokeInvitation)
 				})
 				// Owner-only access

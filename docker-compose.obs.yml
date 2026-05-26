@@ -10,6 +10,7 @@
 # Prometheus:   http://127.0.0.1:${PROMETHEUS_PORT:-9090}
 # Alertmanager: http://127.0.0.1:${ALERTMANAGER_PORT:-9093}
 # Tempo:        http://127.0.0.1:${TEMPO_PORT:-3200}
+# Loki:         http://127.0.0.1:${LOKI_PORT:-3100}
 #
 # Production deployments should set GRAFANA_ADMIN_PASSWORD in .env before
 # exposing Grafana through a reverse proxy or SSH tunnel.
@@ -84,11 +85,44 @@ services:
       - tempo_data:/var/tempo
     restart: unless-stopped
 
+  loki:
+    image: grafana/loki:3.5.0
+    command:
+      - -config.file=/etc/loki/loki.yml
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - ./docker/loki.yml:/etc/loki/loki.yml:ro
+      - loki_data:/loki
+    restart: unless-stopped
+
+  alloy:
+    image: grafana/alloy:v1.7.0
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    # alloy must start after every container it might collect logs from,
+    # otherwise discovery.docker caches a snapshot that goes stale the moment
+    # a later-starting service is (re)created — alloy then keeps polling dead
+    # container IDs until the next discovery refresh (60s default).
+    depends_on:
+      - loki
+      - grafana
+    volumes:
+      - ./docker/alloy.alloy:/etc/alloy/config.alloy:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy_data:/var/lib/alloy/data
+    restart: unless-stopped
+
   grafana:
     image: grafana/grafana:11.6.1
     depends_on:
       - prometheus
       - tempo
+      - loki
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Please set GRAFANA_ADMIN_PASSWORD in .env}
@@ -97,6 +131,7 @@ services:
       - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
     volumes:
       - ./docker/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./docker/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
       - grafana_data:/var/lib/grafana
     restart: unless-stopped
 
@@ -104,4 +139,6 @@ volumes:
   prometheus_data:
   alertmanager_data:
   tempo_data:
+  loki_data:
+  alloy_data:
   grafana_data:

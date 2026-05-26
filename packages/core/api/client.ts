@@ -137,6 +137,7 @@ import {
   EMPTY_SQUAD_LIST,
   EMPTY_SQUAD_MEMBER_STATUS_LIST,
   EMPTY_TIMELINE_ENTRIES,
+  EMPTY_UNREAD_INBOX_COUNT,
   EMPTY_USER,
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
@@ -152,6 +153,7 @@ import {
   SquadMemberStatusListResponseSchema,
   SubscribersListSchema,
   TimelineEntriesSchema,
+  UnreadInboxCountSchema,
   UserSchema,
   WebhookDeliveryResponseSchema,
 } from "./schemas";
@@ -179,6 +181,61 @@ export interface ApiClientOptions {
 export interface LoginResponse {
   token: string;
   user: User;
+}
+
+export interface FeishuNeedsEmailResponse {
+  needs_email: true;
+  session_token: string;
+  name?: string | null;
+  avatar_url?: string | null;
+}
+
+export type FeishuLoginResponse = LoginResponse | FeishuNeedsEmailResponse;
+
+// --- Starter content (post-onboarding import) -----------------------------
+// Shape mirrors the Go request/response in handler/onboarding.go.
+//
+// The client sends both branches of sub-issues and an unbound welcome
+// issue template (title + description, no `agent_id`). The SERVER picks
+// the branch by inspecting the workspace's agent list inside the
+// import transaction. This removes the client as a trusted decider —
+// even if the client has a stale agent cache or lies, the server uses
+// the DB as source of truth.
+
+export interface ImportStarterIssuePayload {
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  /** Server uses `user_id` (per app-wide AssigneePicker convention)
+   *  as assignee when true. No member_id is threaded through. */
+  assign_to_self: boolean;
+}
+
+export interface ImportStarterWelcomeIssueTemplate {
+  title: string;
+  description: string;
+  /** Defaults to "high" on server when empty. */
+  priority: string;
+}
+
+export interface ImportStarterContentPayload {
+  workspace_id: string;
+  project: { title: string; description: string; icon: string };
+  /** Always sent. Server creates it only when an agent exists in the
+   *  workspace; ignored otherwise. Agent id is picked by the server. */
+  welcome_issue_template: ImportStarterWelcomeIssueTemplate;
+  /** Used when the workspace has at least one agent. */
+  agent_guided_sub_issues: ImportStarterIssuePayload[];
+  /** Used when the workspace has zero agents. */
+  self_serve_sub_issues: ImportStarterIssuePayload[];
+}
+
+export interface ImportStarterContentResponse {
+  user: User;
+  project_id: string;
+  /** Non-null when server took the agent-guided branch. */
+  welcome_issue_id: string | null;
 }
 
 export class ApiError extends Error {
@@ -364,6 +421,28 @@ export class ApiClient {
     return this.fetch("/auth/google", {
       method: "POST",
       body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    });
+  }
+
+  async feishuLogin(code: string, redirectUri: string): Promise<FeishuLoginResponse> {
+    return this.fetch("/auth/feishu", {
+      method: "POST",
+      body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    });
+  }
+
+  async feishuBindEmail(
+    sessionToken: string,
+    email: string,
+    code: string,
+  ): Promise<FeishuLoginResponse> {
+    return this.fetch("/auth/feishu/bind", {
+      method: "POST",
+      body: JSON.stringify({
+        session_token: sessionToken,
+        email,
+        code,
+      }),
     });
   }
 
@@ -1136,7 +1215,10 @@ export class ApiClient {
   }
 
   async getUnreadInboxCount(): Promise<{ count: number }> {
-    return this.fetch("/api/inbox/unread-count");
+    const raw = await this.fetch<unknown>("/api/inbox/unread-count");
+    return parseWithFallback(raw, UnreadInboxCountSchema, EMPTY_UNREAD_INBOX_COUNT, {
+      endpoint: "GET /api/inbox/unread-count",
+    });
   }
 
   async markAllInboxRead(): Promise<{ count: number }> {
@@ -1172,6 +1254,7 @@ export class ApiClient {
     cdn_domain: string;
     allow_signup: boolean;
     google_client_id?: string;
+    feishu_app_id?: string;
     posthog_key?: string;
     posthog_host?: string;
     analytics_environment?: string;

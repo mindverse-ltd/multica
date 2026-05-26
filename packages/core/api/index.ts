@@ -4,7 +4,16 @@ export {
   PreviewTooLargeError,
   PreviewUnsupportedError,
 } from "./client";
-export type { ApiClientOptions } from "./client";
+export type {
+  ApiClientOptions,
+  FeishuLoginResponse,
+  FeishuNeedsEmailResponse,
+  ImportStarterContentPayload,
+  LoginResponse,
+  ImportStarterContentResponse,
+  ImportStarterIssuePayload,
+  ImportStarterWelcomeIssueTemplate,
+} from "./client";
 export { parseWithFallback, setSchemaLogger } from "./schema";
 export type { ParseOptions } from "./schema";
 export { DuplicateIssueErrorBodySchema } from "./schemas";

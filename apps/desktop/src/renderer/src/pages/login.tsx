@@ -15,10 +15,16 @@ function requireRuntimeAppUrl(): string {
 export function DesktopLoginPage() {
   const webUrl = requireRuntimeAppUrl();
   const handleGoogleLogin = () => {
-    // Open web login page in the default browser with platform=desktop flag.
-    // The web callback will redirect back via multica:// deep link with the token.
+    // Open the hosted login page in the default browser. The callback page
+    // will redirect back via multica:// deep link with the token.
     window.desktopAPI.openExternal(
-      `${webUrl}/login?platform=desktop`,
+      `${webUrl}/login?platform=desktop&provider=google`,
+    );
+  };
+
+  const handleFeishuLogin = () => {
+    window.desktopAPI.openExternal(
+      `${webUrl}/login?platform=desktop&provider=feishu`,
     );
   };
 
@@ -32,6 +38,7 @@ export function DesktopLoginPage() {
           // Initial workspace navigation happens in routes.tsx via IndexRedirect.
         }}
         onGoogleLogin={handleGoogleLogin}
+        onFeishuLogin={handleFeishuLogin}
       />
     </div>
   );

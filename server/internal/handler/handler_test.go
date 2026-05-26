@@ -2351,13 +2351,24 @@ func TestVerifyCodeBruteForceProtection(t *testing.T) {
 	}
 }
 
-func TestVerifyCodeNewUserHasNoWorkspace(t *testing.T) {
+func TestVerifyCodeNewUserJoinsDefaultWorkspace(t *testing.T) {
 	const email = "workspace-verify-test@multica.ai"
 	ctx := context.Background()
+
+	var defaultWorkspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+		RETURNING id
+	`, "Mindverse All", defaultWorkspaceSlug, "Shared workspace for all users", "MAL").Scan(&defaultWorkspaceID); err != nil {
+		t.Fatalf("create default workspace: %v", err)
+	}
 
 	t.Cleanup(func() {
 		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
 		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, defaultWorkspaceID)
 	})
 
 	// Send code
@@ -2385,18 +2396,109 @@ func TestVerifyCodeNewUserHasNoWorkspace(t *testing.T) {
 		t.Fatalf("VerifyCode: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
+	var resp LoginResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode LoginResponse: %v", err)
+	}
+	if resp.User.OnboardedAt != nil {
+		t.Fatal("VerifyCode response: expected onboarded_at to remain unset until onboarding completes")
+	}
+
 	user, err := testHandler.Queries.GetUserByEmail(ctx, email)
 	if err != nil {
 		t.Fatalf("GetUserByEmail: %v", err)
 	}
+	if user.OnboardedAt.Valid {
+		t.Fatal("GetUserByEmail: expected onboarded_at to remain unset until onboarding completes")
+	}
 
-	// New users should have no workspaces (/workspaces/new creates one)
 	workspaces, err := testHandler.Queries.ListWorkspaces(ctx, user.ID)
 	if err != nil {
 		t.Fatalf("ListWorkspaces: %v", err)
 	}
-	if len(workspaces) != 0 {
-		t.Fatalf("ListWorkspaces: expected 0 workspaces for new user, got %d", len(workspaces))
+	if len(workspaces) != 1 {
+		t.Fatalf("ListWorkspaces: expected 1 workspace for new user, got %d", len(workspaces))
+	}
+	if got := workspaces[0].Slug; got != defaultWorkspaceSlug {
+		t.Fatalf("ListWorkspaces: expected default workspace slug %q, got %q", defaultWorkspaceSlug, got)
+	}
+
+	member, err := testHandler.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
+		UserID:      user.ID,
+		WorkspaceID: workspaces[0].ID,
+	})
+	if err != nil {
+		t.Fatalf("GetMemberByUserAndWorkspace: %v", err)
+	}
+	if member.Role != "member" {
+		t.Fatalf("default workspace role: expected member, got %q", member.Role)
+	}
+}
+
+func TestCreateWorkspaceKeepsDefaultWorkspaceAfterOnboarding(t *testing.T) {
+	const email = "workspace-onboarding-test@multica.ai"
+	const slug = "workspace-onboarding-test"
+	ctx := context.Background()
+
+	var defaultWorkspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (slug) DO UPDATE SET slug = EXCLUDED.slug
+		RETURNING id
+	`, "Mindverse All", defaultWorkspaceSlug, "Shared workspace for all users", "MAL").Scan(&defaultWorkspaceID); err != nil {
+		t.Fatalf("create default workspace: %v", err)
+	}
+
+	var userID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ($1, $2)
+		ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, onboarded_at = NULL
+		RETURNING id
+	`, "Workspace Onboarding Test", email).Scan(&userID); err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, slug)
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, userID)
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, defaultWorkspaceID)
+	})
+
+	req := newRequest("POST", "/api/workspaces", map[string]string{
+		"name": "Workspace Onboarding Test",
+		"slug": slug,
+	})
+	req.Header.Set("X-User-ID", userID)
+	w := httptest.NewRecorder()
+	testHandler.CreateWorkspace(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateWorkspace: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	user, err := testHandler.Queries.GetUser(ctx, parseUUID(userID))
+	if err != nil {
+		t.Fatalf("GetUser: %v", err)
+	}
+	if !user.OnboardedAt.Valid {
+		t.Fatal("GetUser: expected onboarded_at to be set after onboarding workspace creation")
+	}
+
+	workspaces, err := testHandler.Queries.ListWorkspaces(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("ListWorkspaces: %v", err)
+	}
+
+	got := map[string]bool{}
+	for _, workspace := range workspaces {
+		got[workspace.Slug] = true
+	}
+	if !got[defaultWorkspaceSlug] {
+		t.Fatalf("ListWorkspaces: expected default workspace slug %q after onboarding, got %#v", defaultWorkspaceSlug, got)
+	}
+	if !got[slug] {
+		t.Fatalf("ListWorkspaces: expected onboarding workspace slug %q, got %#v", slug, got)
 	}
 }
 

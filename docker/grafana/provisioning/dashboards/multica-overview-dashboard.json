@@ -1,0 +1,405 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "datasource", "uid": "grafana" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "row",
+      "title": "Overview",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false,
+      "id": 100,
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Backend up",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "id": 1,
+      "targets": [
+        { "expr": "up{job=\"multica-backend\"}", "refId": "A", "legendFormat": "{{instance}}" }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "text": "DOWN", "color": "red" } }, "type": "value" },
+            { "options": { "1": { "text": "UP", "color": "green" } }, "type": "value" }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Build",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 4, "y": 1 },
+      "id": 2,
+      "targets": [
+        {
+          "expr": "multica_build_info{job=\"multica-backend\"}",
+          "refId": "A",
+          "legendFormat": "{{version}}"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^Value$/", "values": false },
+        "textMode": "name",
+        "colorMode": "value",
+        "graphMode": "none"
+      },
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "blue" } } }
+    },
+    {
+      "type": "stat",
+      "title": "HTTP in-flight",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 9, "y": 1 },
+      "id": 3,
+      "targets": [
+        { "expr": "sum(multica_http_in_flight_requests)", "refId": "A" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 50 },
+              { "color": "red", "value": 200 }
+            ]
+          }
+        }
+      },
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "type": "stat",
+      "title": "Realtime WS active",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 14, "y": 1 },
+      "id": 4,
+      "targets": [
+        { "expr": "sum(multica_realtime_active_connections)", "refId": "A" }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+    {
+      "type": "stat",
+      "title": "Daemon WS active",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 4, "w": 5, "x": 19, "y": 1 },
+      "id": 5,
+      "targets": [
+        { "expr": "sum(multica_daemonws_active_connections)", "refId": "A" }
+      ],
+      "options": { "colorMode": "value", "graphMode": "area" }
+    },
+
+    {
+      "type": "row",
+      "title": "HTTP",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "id": 101,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Request rate by status (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+      "id": 10,
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(multica_http_requests_total[5m]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "lineInterpolation": "smooth", "fillOpacity": 15, "stacking": { "mode": "normal" } }
+        }
+      },
+      "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max"], "placement": "right" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Latency p50 / p95 / p99 (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+      "id": 11,
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(multica_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(multica_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(multica_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "options": { "legend": { "displayMode": "table", "calcs": ["mean", "max"], "placement": "right" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Error rate (5xx %)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+      "id": 12,
+      "targets": [
+        {
+          "expr": "100 * sum(rate(multica_http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(multica_http_requests_total[5m])), 0.001)",
+          "legendFormat": "5xx %",
+          "refId": "A"
+        },
+        {
+          "expr": "100 * sum(rate(multica_http_requests_total{status=~\"4..\"}[5m])) / clamp_min(sum(rate(multica_http_requests_total[5m])), 0.001)",
+          "legendFormat": "4xx %",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top routes by RPS (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+      "id": 13,
+      "targets": [
+        {
+          "expr": "topk(15, sum by (method, route) (rate(multica_http_requests_total[5m])))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "transformations": [
+        { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true } } }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+
+    {
+      "type": "row",
+      "title": "Database pool",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 },
+      "id": 102,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Connections (acquired / idle / total / max)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+      "id": 20,
+      "targets": [
+        { "expr": "multica_db_pool_acquired_conns", "legendFormat": "acquired", "refId": "A" },
+        { "expr": "multica_db_pool_idle_conns", "legendFormat": "idle", "refId": "B" },
+        { "expr": "multica_db_pool_total_conns", "legendFormat": "total", "refId": "C" },
+        { "expr": "multica_db_pool_max_conns", "legendFormat": "max", "refId": "D" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Acquire wait (per second, 5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+      "id": 21,
+      "targets": [
+        {
+          "expr": "rate(multica_db_pool_empty_acquire_wait_seconds_total[5m])",
+          "legendFormat": "empty acquire wait/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(multica_db_pool_acquire_duration_seconds_total[5m])",
+          "legendFormat": "acquire duration/s",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Acquire events (5m)",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 31 },
+      "id": 22,
+      "targets": [
+        { "expr": "rate(multica_db_pool_acquire_count[5m])", "legendFormat": "acquires", "refId": "A" },
+        { "expr": "rate(multica_db_pool_empty_acquire_count[5m])", "legendFormat": "empty acquires", "refId": "B" },
+        { "expr": "rate(multica_db_pool_canceled_acquire_count[5m])", "legendFormat": "canceled", "refId": "C" },
+        { "expr": "rate(multica_db_pool_new_conns_count[5m])", "legendFormat": "new conns", "refId": "D" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ops" } }
+    },
+
+    {
+      "type": "row",
+      "title": "WebSocket",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 39 },
+      "id": 103,
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Realtime connections",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "id": 30,
+      "targets": [
+        { "expr": "multica_realtime_active_connections", "legendFormat": "active", "refId": "A" },
+        { "expr": "rate(multica_realtime_connects_total[5m])", "legendFormat": "connects/s", "refId": "B" },
+        { "expr": "rate(multica_realtime_disconnects_total[5m])", "legendFormat": "disconnects/s", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Realtime messages",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
+      "id": 31,
+      "targets": [
+        { "expr": "rate(multica_realtime_messages_sent_total[5m])", "legendFormat": "sent/s", "refId": "A" },
+        { "expr": "rate(multica_realtime_messages_dropped_total[5m])", "legendFormat": "dropped/s", "refId": "B" },
+        { "expr": "rate(multica_realtime_slow_evictions_total[5m])", "legendFormat": "slow evictions/s", "refId": "C" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Daemon WS",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 48 },
+      "id": 32,
+      "targets": [
+        { "expr": "multica_daemonws_active_connections", "legendFormat": "active", "refId": "A" },
+        { "expr": "rate(multica_daemonws_connects_total[5m])", "legendFormat": "connects/s", "refId": "B" },
+        { "expr": "rate(multica_daemonws_wakeup_published_total[5m])", "legendFormat": "wakeups published/s", "refId": "C" },
+        { "expr": "rate(multica_daemonws_wakeup_received_total[5m])", "legendFormat": "wakeups received/s", "refId": "D" },
+        { "expr": "sum by (result) (rate(multica_daemonws_wakeup_delivered_total[5m]))", "legendFormat": "delivered {{result}}/s", "refId": "E" }
+      ]
+    },
+
+    {
+      "type": "row",
+      "title": "Go runtime",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 56 },
+      "id": 104,
+      "collapsed": true,
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Goroutines",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "gridPos": { "h": 7, "w": 8, "x": 0, "y": 57 },
+          "id": 40,
+          "targets": [{ "expr": "go_goroutines{job=\"multica-backend\"}", "legendFormat": "goroutines", "refId": "A" }]
+        },
+        {
+          "type": "timeseries",
+          "title": "Resident memory",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "gridPos": { "h": 7, "w": 8, "x": 8, "y": 57 },
+          "id": 41,
+          "fieldConfig": { "defaults": { "unit": "bytes" } },
+          "targets": [{ "expr": "process_resident_memory_bytes{job=\"multica-backend\"}", "legendFormat": "rss", "refId": "A" }]
+        },
+        {
+          "type": "timeseries",
+          "title": "GC pause p99 (5m)",
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "gridPos": { "h": 7, "w": 8, "x": 16, "y": 57 },
+          "id": 42,
+          "fieldConfig": { "defaults": { "unit": "s" } },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(go_gc_duration_seconds_bucket{job=\"multica-backend\"}[5m])))",
+              "legendFormat": "p99",
+              "refId": "A"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["multica", "overview"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Prometheus",
+        "current": {},
+        "hide": 0
+      }
+    ]
+  },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Multica Overview",
+  "uid": "multica-overview",
+  "version": 1,
+  "weekStart": ""
+}

@@ -28,10 +28,10 @@ import { useT } from "../i18n";
 // Types
 // ---------------------------------------------------------------------------
 
-interface GoogleAuthConfig {
+interface OAuthConfig {
   clientId: string;
   redirectUri: string;
-  /** Opaque state passed through Google OAuth (e.g. "platform:desktop"). */
+  /** Opaque state passed through OAuth (e.g. "platform:desktop"). */
   state?: string;
 }
 
@@ -49,18 +49,31 @@ interface LoginPageProps {
    *  Query before this fires, so the caller can compute a destination URL. */
   onSuccess: () => void;
   /** Google OAuth config. Omit to disable Google login. */
-  google?: GoogleAuthConfig;
+  google?: OAuthConfig;
+  /** Feishu OAuth config. Omit to disable Feishu login. */
+  feishu?: OAuthConfig;
   /** CLI callback config for authorizing CLI tools. */
   cliCallback?: CliCallbackConfig;
   /** Called after a token is obtained (e.g. to set cookies). */
   onTokenObtained?: () => void;
   /** Override Google login handler (e.g. desktop opens browser externally). When provided, renders the Google button even if `google` config is omitted. */
   onGoogleLogin?: () => void;
-  /** Slot rendered at the bottom of the sign-in card, below the
-   *  Google button. The web shell uses it for a "Prefer the desktop
-   *  app?" prompt; desktop omits it (a download prompt inside the app
-   *  would be absurd). */
+  /** Override Feishu login handler (e.g. desktop opens browser externally). When provided, renders the Feishu button even if `feishu` config is omitted. */
+  onFeishuLogin?: () => void;
+  /** When set, automatically starts the selected OAuth login once the page is ready. */
+  autoStartProvider?: "google" | "feishu";
+  /** Whether to show the direct email-code login form on the primary login step. */
+  emailLogin?: boolean;
+  /** Optional helper text shown on email-code verification screens. */
+  verificationCodeHint?: string;
+  /** Slot rendered at the bottom of the sign-in card, below the OAuth buttons. */
   extra?: ReactNode;
+  /** Feishu email binding session (user has no email, needs to input one). */
+  bindEmail?: {
+    sessionToken: string;
+    name?: string | null;
+    avatarUrl?: string | null;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -101,14 +114,22 @@ export function LoginPage({
   logo,
   onSuccess,
   google,
+  feishu,
   cliCallback,
   onTokenObtained,
   onGoogleLogin,
+  onFeishuLogin,
+  autoStartProvider,
+  emailLogin = true,
+  verificationCodeHint,
   extra,
+  bindEmail,
 }: LoginPageProps) {
   const { t } = useT("auth");
   const qc = useQueryClient();
-  const [step, setStep] = useState<"email" | "code" | "cli_confirm">("email");
+  const [step, setStep] = useState<"email" | "code" | "cli_confirm" | "bind_email" | "bind_email_code">(
+    bindEmail ? "bind_email" : "email",
+  );
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
@@ -118,6 +139,7 @@ export function LoginPage({
   // Tracks how the existing session was detected so handleCliAuthorize
   // uses the matching token source (cookie → issueCliToken, localStorage → direct).
   const authSourceRef = useRef<"cookie" | "localStorage">("cookie");
+  const autoStartRef = useRef(false);
 
   // Check for existing session when CLI callback is present.
   // Prioritises cookie auth (= current browser session) to avoid authorising
@@ -268,7 +290,7 @@ export function LoginPage({
     }
   };
 
-  const handleGoogleLogin = () => {
+  const handleGoogleLogin = useCallback(() => {
     if (onGoogleLogin) {
       onGoogleLogin();
       return;
@@ -284,7 +306,97 @@ export function LoginPage({
     });
     if (google.state) params.set("state", google.state);
     window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
-  };
+  }, [google, onGoogleLogin]);
+
+  const handleFeishuLogin = useCallback(() => {
+    if (onFeishuLogin) {
+      onFeishuLogin();
+      return;
+    }
+    if (!feishu) return;
+    const params = new URLSearchParams({
+      client_id: feishu.clientId,
+      redirect_uri: feishu.redirectUri,
+      response_type: "code",
+      scope: "contact:user.base:readonly contact:user.email:readonly",
+    });
+    if (feishu.state) params.set("state", feishu.state);
+    window.location.href = `https://accounts.feishu.cn/open-apis/authen/v1/authorize?${params}`;
+  }, [feishu, onFeishuLogin]);
+
+  const handleBindEmailSendCode = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
+      if (!email) {
+        setError("Email is required");
+        return;
+      }
+      setLoading(true);
+      setError("");
+      try {
+        await useAuthStore.getState().sendCode(email);
+        setStep("bind_email_code");
+        setCode("");
+        setCooldown(60);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to send code",
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [email],
+  );
+
+  const handleBindEmailVerify = useCallback(
+    async (value: string) => {
+      if (!bindEmail || value.length !== 6) return;
+      setLoading(true);
+      setError("");
+      try {
+        await useAuthStore
+          .getState()
+          .bindFeishuEmail(bindEmail.sessionToken, email, value);
+        const wsList = await api.listWorkspaces();
+        qc.setQueryData(workspaceKeys.list(), wsList);
+        onTokenObtained?.();
+        onSuccess();
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Invalid or expired code",
+        );
+        setCode("");
+        setLoading(false);
+      }
+    },
+    [bindEmail, email, onSuccess, onTokenObtained, qc],
+  );
+
+  useEffect(() => {
+    if (autoStartRef.current || !autoStartProvider || step !== "email") return;
+    if (existingUser) return;
+
+    if (autoStartProvider === "google" && (google || onGoogleLogin)) {
+      autoStartRef.current = true;
+      handleGoogleLogin();
+      return;
+    }
+    if (autoStartProvider === "feishu" && (feishu || onFeishuLogin)) {
+      autoStartRef.current = true;
+      handleFeishuLogin();
+    }
+  }, [
+    autoStartProvider,
+    existingUser,
+    feishu,
+    google,
+    handleFeishuLogin,
+    handleGoogleLogin,
+    onFeishuLogin,
+    onGoogleLogin,
+    step,
+  ]);
 
   // -------------------------------------------------------------------------
   // CLI confirm step
@@ -346,6 +458,11 @@ export function LoginPage({
             <CardDescription>
               {t(($) => $.verify.description, { email })}
             </CardDescription>
+            {verificationCodeHint && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {verificationCodeHint}
+              </p>
+            )}
           </CardHeader>
           <CardContent className="flex flex-col items-center gap-4">
             <InputOTP
@@ -401,9 +518,172 @@ export function LoginPage({
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // Bind email - code verification step
+  // ---------------------------------------------------------------------------
+
+  if (step === "bind_email_code" && bindEmail) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            {logo && <div className="mx-auto mb-4">{logo}</div>}
+            <CardTitle className="text-2xl">Check your email</CardTitle>
+            <CardDescription>
+              We sent a verification code to{" "}
+              <span className="font-medium text-foreground">{email}</span>
+            </CardDescription>
+            {verificationCodeHint && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {verificationCodeHint}
+              </p>
+            )}
+          </CardHeader>
+          <CardContent className="flex flex-col items-center gap-4">
+            <InputOTP
+              maxLength={6}
+              value={code}
+              onChange={(value) => {
+                setCode(value);
+                if (value.length === 6) handleBindEmailVerify(value);
+              }}
+              disabled={loading}
+            >
+              <InputOTPGroup>
+                <InputOTPSlot index={0} />
+                <InputOTPSlot index={1} />
+                <InputOTPSlot index={2} />
+                <InputOTPSlot index={3} />
+                <InputOTPSlot index={4} />
+                <InputOTPSlot index={5} />
+              </InputOTPGroup>
+            </InputOTP>
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <button
+                type="button"
+                onClick={handleResend}
+                disabled={cooldown > 0}
+                className="text-primary underline-offset-4 hover:underline disabled:text-muted-foreground disabled:no-underline disabled:cursor-not-allowed"
+              >
+                {cooldown > 0 ? `Resend in ${cooldown}s` : "Resend code"}
+              </button>
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              onClick={() => {
+                setStep("bind_email");
+                setCode("");
+                setError("");
+              }}
+            >
+              Back
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Bind email step
+  // ---------------------------------------------------------------------------
+
+  if (step === "bind_email" && bindEmail) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            {logo && <div className="mx-auto mb-4">{logo}</div>}
+            <CardTitle className="text-2xl">Complete your sign up</CardTitle>
+            <CardDescription>
+              Your Feishu account doesn't have an email. Enter your email to
+              continue.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              id="bind-email-form"
+              onSubmit={handleBindEmailSendCode}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <Label htmlFor="bind-email">Email</Label>
+                <Input
+                  id="bind-email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  autoFocus
+                  required
+                />
+              </div>
+              {error && <p className="text-sm text-destructive">{error}</p>}
+            </form>
+          </CardContent>
+          <CardFooter className="flex flex-col gap-3">
+            <Button
+              type="submit"
+              form="bind-email-form"
+              className="w-full"
+              size="lg"
+              disabled={!email || loading}
+            >
+              {loading ? "Sending code..." : "Continue"}
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Email step
   // -------------------------------------------------------------------------
+
+  if (!emailLogin) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            {logo && <div className="mx-auto mb-4">{logo}</div>}
+            <CardTitle className="text-2xl">Sign in to Multica</CardTitle>
+            <CardDescription>
+              Continue with Feishu to access this workspace.
+            </CardDescription>
+          </CardHeader>
+          <CardFooter className="flex flex-col gap-3">
+            {feishu || onFeishuLogin ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                size="lg"
+                onClick={handleFeishuLogin}
+                disabled={loading}
+              >
+                <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <rect x="3" y="4" width="18" height="16" rx="4" fill="#00C45A" />
+                  <path d="M8 9.5h8M8 13h5" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+                </svg>
+                Continue with Feishu
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Feishu login is not configured for this deployment.
+              </p>
+            )}
+            {extra && <div className="w-full pt-1 text-center">{extra}</div>}
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-svh items-center justify-center">
@@ -448,7 +728,7 @@ export function LoginPage({
               ? t(($) => $.signin.sending)
               : t(($) => $.signin.continue)}
           </Button>
-          {(google || onGoogleLogin) && (
+          {(google || onGoogleLogin || feishu || onFeishuLogin) && (
             <>
               <div className="relative w-full">
                 <div className="absolute inset-0 flex items-center">
@@ -460,34 +740,52 @@ export function LoginPage({
                   </span>
                 </div>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                size="lg"
-                onClick={handleGoogleLogin}
-                disabled={loading}
-              >
-                <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
-                  <path
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
-                    fill="#4285F4"
-                  />
-                  <path
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                    fill="#34A853"
-                  />
-                  <path
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                    fill="#FBBC05"
-                  />
-                  <path
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                    fill="#EA4335"
-                  />
-                </svg>
-                {t(($) => $.signin.google)}
-              </Button>
+              {(feishu || onFeishuLogin) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  size="lg"
+                  onClick={handleFeishuLogin}
+                  disabled={loading}
+                >
+                  <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="16" rx="4" fill="#00C45A" />
+                    <path d="M8 9.5h8M8 13h5" stroke="white" strokeWidth="1.8" strokeLinecap="round" />
+                  </svg>
+                  Continue with Feishu
+                </Button>
+              )}
+              {(google || onGoogleLogin) && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  size="lg"
+                  onClick={handleGoogleLogin}
+                  disabled={loading}
+                >
+                  <svg className="mr-2 h-4 w-4" viewBox="0 0 24 24">
+                    <path
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"
+                      fill="#4285F4"
+                    />
+                    <path
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                      fill="#34A853"
+                    />
+                    <path
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                      fill="#FBBC05"
+                    />
+                    <path
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                      fill="#EA4335"
+                    />
+                  </svg>
+                  Continue with Google
+                </Button>
+              )}
             </>
           )}
           {extra && <div className="w-full pt-1 text-center">{extra}</div>}

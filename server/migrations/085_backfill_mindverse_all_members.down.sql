@@ -1,0 +1,3 @@
+-- No-op rollback: this data backfill intentionally does not delete
+-- memberships because backfilled rows cannot be safely distinguished from
+-- legitimate mindverse-all memberships after insertion.

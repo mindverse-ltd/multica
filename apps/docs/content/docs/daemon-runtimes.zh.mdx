@@ -89,6 +89,17 @@ Multica 对并发有两层限额：
 
 如果你看到执行任务卡在 `queued` 状态不 `dispatched`，通常就是这两层里某一层打满了。
 
+## 调整任务超时
+
+在服务端 task sweeper 介入之前，守护进程自己也有执行限制：
+
+| 配置 | 默认值 | CLI flag | 环境变量 |
+|---|---|---|---|
+| 整体 agent 执行超时 | **2 小时** | `--agent-timeout` | `MULTICA_AGENT_TIMEOUT` |
+| Codex 语义无进展超时 | **10 分钟** | `--codex-semantic-inactivity-timeout` | `MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT` |
+
+Codex 这项是 provider 专属超时。它只在 Codex 不再产出有意义进展时触发；仍在运行中的 terminal 命令会被视为有效工作。如果 Codex 任务在 10 分钟左右失败，错误里出现 `codex semantic inactivity timeout`，就在运行守护进程的机器上调大 `MULTICA_CODEX_SEMANTIC_INACTIVITY_TIMEOUT`，然后重启守护进程。
+
 ## 守护进程崩溃后，没跑完的任务会怎样
 
 守护进程崩溃或被强行结束时，它领走的执行任务会停在 `dispatched` 或 `running` 状态。下次启动时，守护进程会告诉服务器：「这些任务不是我的了，请标记失败。」服务器把它们改成 `failed`，失败原因 `runtime_recovery`——对可重试的来源，任务自动重新排队。

@@ -255,6 +255,21 @@ type DaemonToken struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type ExternalIdentity struct {
+	ID             pgtype.UUID        `json:"id"`
+	UserID         pgtype.UUID        `json:"user_id"`
+	Provider       string             `json:"provider"`
+	ProviderUserID string             `json:"provider_user_id"`
+	UnionID        pgtype.Text        `json:"union_id"`
+	TenantKey      pgtype.Text        `json:"tenant_key"`
+	Email          pgtype.Text        `json:"email"`
+	Name           pgtype.Text        `json:"name"`
+	AvatarUrl      pgtype.Text        `json:"avatar_url"`
+	RawProfile     []byte             `json:"raw_profile"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Feedback struct {
 	ID          pgtype.UUID        `json:"id"`
 	UserID      pgtype.UUID        `json:"user_id"`
@@ -262,6 +277,19 @@ type Feedback struct {
 	Message     string             `json:"message"`
 	Metadata    []byte             `json:"metadata"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type FeishuPendingRegistration struct {
+	ID           pgtype.UUID        `json:"id"`
+	SessionToken string             `json:"session_token"`
+	OpenID       string             `json:"open_id"`
+	UnionID      pgtype.Text        `json:"union_id"`
+	TenantKey    pgtype.Text        `json:"tenant_key"`
+	Name         pgtype.Text        `json:"name"`
+	AvatarUrl    pgtype.Text        `json:"avatar_url"`
+	RawProfile   []byte             `json:"raw_profile"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ExpiresAt    pgtype.Timestamptz `json:"expires_at"`
 }
 
 type GithubInstallation struct {

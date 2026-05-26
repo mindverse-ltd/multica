@@ -1,6 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import { onInboxIssueDeleted, onInboxIssueStatusChanged } from "./ws-updaters";
+import {
+  onInboxInvalidate,
+  onInboxIssueDeleted,
+  onInboxIssueStatusChanged,
+  onInboxNew,
+} from "./ws-updaters";
 import { inboxKeys } from "./queries";
 import type { InboxItem } from "../types";
 
@@ -70,5 +75,31 @@ describe("onInboxIssueStatusChanged", () => {
     const after = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
     expect(after?.find((i) => i.id === "i1")?.issue_status).toBe("done");
     expect(after?.find((i) => i.id === "i2")?.issue_status).toBe("todo");
+  });
+});
+
+describe("inbox query invalidation", () => {
+  it("invalidates both list and unread-count queries for incoming inbox events", () => {
+    const qc = new QueryClient();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    onInboxNew(qc, wsId, makeItem("i1", "issue-a"));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: inboxKeys.list(wsId) });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: inboxKeys.unreadCount(wsId),
+    });
+  });
+
+  it("invalidates both list and unread-count queries for broad inbox invalidation", () => {
+    const qc = new QueryClient();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+
+    onInboxInvalidate(qc, wsId);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: inboxKeys.list(wsId) });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: inboxKeys.unreadCount(wsId),
+    });
   });
 });

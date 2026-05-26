@@ -38,6 +38,7 @@ var ErrSignupProhibited = SignupError{Message: "user registration is disabled on
 var ErrEmailNotAllowed = SignupError{Message: "email address or domain not allowed on this instance"}
 
 const devVerificationCodeEnv = "MULTICA_DEV_VERIFICATION_CODE"
+const defaultWorkspaceSlug = "mindverse-all"
 
 // supportedLanguages mirrors `SUPPORTED_LOCALES` in packages/core/i18n/types.ts.
 // Keep both lists in sync when adding a locale — the user-controlled `language`
@@ -180,14 +181,62 @@ func (h *Handler) findOrCreateUser(ctx context.Context, email string) (user db.U
 	if at := strings.Index(email, "@"); at > 0 {
 		name = email[:at]
 	}
-	created, err := h.Queries.CreateUser(ctx, db.CreateUserParams{
+
+	params := db.CreateUserParams{
 		Name:  name,
 		Email: email,
-	})
+	}
+
+	if h.TxStarter != nil {
+		tx, err := h.TxStarter.Begin(ctx)
+		if err != nil {
+			return db.User{}, false, err
+		}
+		defer tx.Rollback(ctx)
+
+		qtx := h.Queries.WithTx(tx)
+		created, err := qtx.CreateUser(ctx, params)
+		if err != nil {
+			return db.User{}, false, err
+		}
+		if err := addUserToDefaultWorkspace(ctx, qtx, created); err != nil {
+			return db.User{}, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return db.User{}, false, err
+		}
+		return created, true, nil
+	}
+
+	created, err := h.Queries.CreateUser(ctx, params)
 	if err != nil {
 		return db.User{}, false, err
 	}
+	if err := addUserToDefaultWorkspace(ctx, h.Queries, created); err != nil {
+		return db.User{}, false, err
+	}
 	return created, true, nil
+}
+
+func addUserToDefaultWorkspace(ctx context.Context, q *db.Queries, user db.User) error {
+	ws, err := q.GetWorkspaceBySlug(ctx, defaultWorkspaceSlug)
+	if err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	_, err = q.CreateMemberIfNotExists(ctx, db.CreateMemberIfNotExistsParams{
+		WorkspaceID: ws.ID,
+		UserID:      user.ID,
+		Role:        "member",
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // signupSourceFromRequest reads the attribution cookie the web frontend

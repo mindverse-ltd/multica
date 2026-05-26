@@ -4,7 +4,6 @@ import { Suspense, useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
-import { useConfigStore } from "@multica/core/config";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import {
   paths,
@@ -22,10 +21,9 @@ import {
 } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
 import { Loader2 } from "lucide-react";
-import { captureDownloadIntent } from "@multica/core/analytics";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";
-import Link from "next/link";
 import { LoginPage, validateCliCallback } from "@multica/views/auth";
+import { useConfigStore } from "@multica/core/config";
 import { useT } from "@multica/views/i18n";
 
 /**
@@ -58,7 +56,6 @@ function LoginPageContent() {
   const router = useRouter();
   const qc = useQueryClient();
   const { t } = useT("auth");
-  const googleClientId = useConfigStore((state) => state.googleClientId);
   const user = useAuthStore((s) => s.user);
   const isLoading = useAuthStore((s) => s.isLoading);
   const searchParams = useSearchParams();
@@ -66,6 +63,7 @@ function LoginPageContent() {
   const cliCallbackRaw = searchParams.get("cli_callback");
   const cliState = searchParams.get("cli_state") || "";
   const platform = searchParams.get("platform");
+  const provider = searchParams.get("provider");
   const isDesktopHandoff = platform === "desktop" && !cliCallbackRaw;
   // `next` carries a protected URL the user was originally headed to
   // (e.g. /invite/{id}). With URL-driven workspaces there is no legacy
@@ -73,6 +71,8 @@ function LoginPageContent() {
   // the user's workspace list. Sanitize first so a crafted `?next=https://evil`
   // cannot bounce the user off-origin after a successful login.
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
+  const bindEmailSessionToken = searchParams.get("bind_email");
+  const feishuClientId = useConfigStore((s) => s.feishuAppId);
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
@@ -126,14 +126,14 @@ function LoginPageContent() {
     router.push(dest);
   };
 
-  // Build Google OAuth state: encode platform + next URL so the callback
-  // can redirect to the right place after login.
-  const googleState = [
-    platform === "desktop" ? "platform:desktop" : "",
-    nextUrl ? `next:${nextUrl}` : "",
-  ]
-    .filter(Boolean)
-    .join(",") || undefined;
+  const buildProviderState = (providerName: "google" | "feishu") =>
+    [
+      `provider:${providerName}`,
+      platform === "desktop" ? "platform:desktop" : "",
+      nextUrl ? `next:${nextUrl}` : "",
+    ]
+      .filter(Boolean)
+      .join(",") || undefined;
 
   // While the desktop handoff is in progress (or has produced a token/error),
   // render a dedicated screen instead of flashing the login form or redirecting
@@ -188,12 +188,12 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
-      google={
-        googleClientId
+      feishu={
+        feishuClientId
           ? {
-              clientId: googleClientId,
+              clientId: feishuClientId,
               redirectUri: `${window.location.origin}/auth/callback`,
-              state: googleState,
+              state: buildProviderState("feishu"),
             }
           : undefined
       }
@@ -202,19 +202,21 @@ function LoginPageContent() {
           ? { url: cliCallbackRaw, state: cliState }
           : undefined
       }
-      onTokenObtained={setLoggedInCookie}
-      extra={
-        <span className="text-xs text-muted-foreground">
-          {t(($) => $.web.prefer_desktop)}{" "}
-          <Link
-            href="/download"
-            onClick={() => captureDownloadIntent("login")}
-            className="font-medium text-foreground underline decoration-foreground/30 underline-offset-4 hover:decoration-foreground/70"
-          >
-            {t(($) => $.web.download)}
-          </Link>
-        </span>
+      bindEmail={
+        bindEmailSessionToken
+          ? {
+              sessionToken: bindEmailSessionToken,
+              name: searchParams.get("name"),
+              avatarUrl: searchParams.get("avatar_url"),
+            }
+          : undefined
       }
+      onTokenObtained={setLoggedInCookie}
+      autoStartProvider={
+        provider === "feishu" ? provider : undefined
+      }
+      emailLogin={false}
+      verificationCodeHint="当前测试环境默认验证码：888888"
     />
   );
 }

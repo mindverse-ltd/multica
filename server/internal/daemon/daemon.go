@@ -2699,6 +2699,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		if errMsg == "" {
 			errMsg = fmt.Sprintf("%s execution %s", provider, result.Status)
 		}
+		failureReason := ""
+		if classified, ok := classifyRetryableProviderFailure(provider, errMsg); ok {
+			failureReason = classified
+		}
 		// Forward SessionID/WorkDir on the blocked path: backends commonly
 		// emit a real session_id before failing (rate-limit, tool error,
 		// model reject, …). Without this the chat_session resume pointer
@@ -2711,8 +2715,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		// classifier a corrupt image or oversized payload baked into the
 		// conversation permanently blocks the issue: every follow-up
 		// task resumes the same poisoned session and hits the same 400.
-		failureReason, _ := classifyPoisonedError(errMsg)
-		if failureReason != "" {
+		if poisonedReason, ok := classifyPoisonedError(errMsg); ok {
+			failureReason = poisonedReason
 			taskLog.Warn("agent failed with poisoned API error, classifying as blocked",
 				"failure_reason", failureReason,
 			)
@@ -2723,8 +2727,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			SessionID:     result.SessionID,
 			WorkDir:       env.WorkDir,
 			EnvRoot:       env.RootDir,
-			Usage:         usageEntries,
 			FailureReason: failureReason,
+			Usage:         usageEntries,
 		}, nil
 	}
 }

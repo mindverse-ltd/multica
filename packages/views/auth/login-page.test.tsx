@@ -128,6 +128,28 @@ describe("LoginPage", () => {
     ).toBeInTheDocument();
   });
 
+  it("can render a Feishu-only primary login step", () => {
+    render(
+      <LoginPage
+        onSuccess={onSuccess}
+        emailLogin={false}
+        feishu={{
+          clientId: "feishu-client-id",
+          redirectUri: "http://localhost:3000/auth/callback",
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/sign in to multica/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/enter your email to get a login code/i),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /continue with feishu/i }),
+    ).toBeInTheDocument();
+  });
+
   // -------------------------------------------------------------------------
   // Email validation
   // -------------------------------------------------------------------------
@@ -386,6 +408,25 @@ describe("LoginPage", () => {
     renderWithI18n(<LoginPage onSuccess={onSuccess} />);
     expect(
       screen.queryByRole("button", { name: /continue with google/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders Feishu OAuth button when feishu prop provided", () => {
+    render(
+      <LoginPage
+        onSuccess={onSuccess}
+        feishu={{ clientId: "cli-feishu", redirectUri: "http://localhost/cb" }}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: /continue with feishu/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("hides Feishu OAuth button when feishu prop omitted", () => {
+    render(<LoginPage onSuccess={onSuccess} />);
+    expect(
+      screen.queryByRole("button", { name: /continue with feishu/i }),
     ).not.toBeInTheDocument();
   });
 

@@ -97,7 +97,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 
 	msgCh := make(chan Message, 256)
 	resCh := make(chan Result, 1)
-	semanticActivityCh := make(chan string, 256)
+	semanticActivityCh := make(chan codexSemanticEvent, 256)
 
 	var outputMu sync.Mutex
 	var output strings.Builder
@@ -119,11 +119,11 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				outputMu.Unlock()
 			}
 			trySend(msgCh, msg)
-			trySendString(semanticActivityCh, describeCodexSemanticActivity(msg))
+			trySendCodexSemanticEvent(semanticActivityCh, codexSemanticEventFromMessage(msg))
 		},
 		onSemanticActivity: func(description string) {
 			b.cfg.Logger.Debug("codex semantic activity observed", "activity", description)
-			trySendString(semanticActivityCh, description)
+			trySendCodexSemanticEvent(semanticActivityCh, codexSemanticEvent{description: description})
 		},
 		onTurnDone: func(aborted bool) {
 			select {
@@ -241,8 +241,33 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 
 		lastSemanticActivity := time.Now()
 		lastSemanticActivityDescription := "turn/start"
+		activeToolCalls := map[string]bool{}
+		activeAnonymousTools := 0
+		activeToolCount := func() int {
+			return len(activeToolCalls) + activeAnonymousTools
+		}
 		semanticTimer := time.NewTimer(semanticInactivityTimeout)
+		semanticTimerActive := true
 		defer semanticTimer.Stop()
+		stopSemanticTimer := func() {
+			if semanticTimerActive {
+				if !semanticTimer.Stop() {
+					select {
+					case <-semanticTimer.C:
+					default:
+					}
+				}
+				semanticTimerActive = false
+			}
+		}
+		resetSemanticTimer := func() {
+			if semanticTimerActive {
+				resetTimer(semanticTimer, semanticInactivityTimeout)
+			} else {
+				semanticTimer.Reset(semanticInactivityTimeout)
+				semanticTimerActive = true
+			}
+		}
 
 		waitingForTurn := true
 		for waitingForTurn {
@@ -261,9 +286,33 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				}
 			case activity := <-semanticActivityCh:
 				lastSemanticActivity = time.Now()
-				lastSemanticActivityDescription = activity
-				resetTimer(semanticTimer, semanticInactivityTimeout)
+				lastSemanticActivityDescription = activity.description
+				if activity.toolStarted {
+					if activity.callID == "" {
+						activeAnonymousTools++
+					} else {
+						activeToolCalls[activity.callID] = true
+					}
+				}
+				if activity.toolFinished {
+					if activity.callID == "" {
+						if activeAnonymousTools > 0 {
+							activeAnonymousTools--
+						}
+					} else {
+						delete(activeToolCalls, activity.callID)
+					}
+				}
+				if activeToolCount() > 0 {
+					stopSemanticTimer()
+				} else {
+					resetSemanticTimer()
+				}
 			case <-semanticTimer.C:
+				semanticTimerActive = false
+				if activeToolCount() > 0 {
+					continue
+				}
 				waitingForTurn = false
 				finalStatus = "timeout"
 				finalError = fmt.Sprintf("%s after %s without agent progress (last activity: %s)", CodexSemanticInactivityMarker, semanticInactivityTimeout, lastSemanticActivityDescription)
@@ -446,7 +495,27 @@ func resetTimer(timer *time.Timer, d time.Duration) {
 	timer.Reset(d)
 }
 
-func trySendString(ch chan<- string, value string) {
+type codexSemanticEvent struct {
+	description  string
+	toolStarted  bool
+	toolFinished bool
+	callID       string
+}
+
+func codexSemanticEventFromMessage(msg Message) codexSemanticEvent {
+	event := codexSemanticEvent{description: describeCodexSemanticActivity(msg)}
+	switch msg.Type {
+	case MessageToolUse:
+		event.toolStarted = true
+		event.callID = msg.CallID
+	case MessageToolResult:
+		event.toolFinished = true
+		event.callID = msg.CallID
+	}
+	return event
+}
+
+func trySendCodexSemanticEvent(ch chan<- codexSemanticEvent, value codexSemanticEvent) {
 	select {
 	case ch <- value:
 	default:
