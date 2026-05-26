@@ -408,22 +408,24 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dbCode, err := h.Queries.GetLatestVerificationCode(r.Context(), email)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid or expired code")
-		return
-	}
-
 	isDevCode := isDevVerificationCode(code)
-	if !isDevCode && subtle.ConstantTimeCompare([]byte(code), []byte(dbCode.Code)) != 1 {
-		_ = h.Queries.IncrementVerificationCodeAttempts(r.Context(), dbCode.ID)
-		writeError(w, http.StatusBadRequest, "invalid or expired code")
-		return
-	}
+	if !isDevCode {
+		dbCode, err := h.Queries.GetLatestVerificationCode(r.Context(), email)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid or expired code")
+			return
+		}
 
-	if err := h.Queries.MarkVerificationCodeUsed(r.Context(), dbCode.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to verify code")
-		return
+		if subtle.ConstantTimeCompare([]byte(code), []byte(dbCode.Code)) != 1 {
+			_ = h.Queries.IncrementVerificationCodeAttempts(r.Context(), dbCode.ID)
+			writeError(w, http.StatusBadRequest, "invalid or expired code")
+			return
+		}
+
+		if err := h.Queries.MarkVerificationCodeUsed(r.Context(), dbCode.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify code")
+			return
+		}
 	}
 
 	user, isNew, err := h.findOrCreateUser(r.Context(), email)

@@ -2245,6 +2245,38 @@ func TestVerifyCodeAcceptsConfiguredDevCodeOutsideProduction(t *testing.T) {
 	}
 }
 
+func TestVerifyCodeAcceptsConfiguredDevCodeWithoutDbRecord(t *testing.T) {
+	t.Setenv(devVerificationCodeEnv, "888888")
+	t.Setenv("APP_ENV", "development")
+
+	const email = "dev-code-no-db-record-test@multica.ai"
+	ctx := context.Background()
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM verification_code WHERE email = $1`, email)
+		user, err := testHandler.Queries.GetUserByEmail(ctx, email)
+		if err == nil {
+			workspaces, listErr := testHandler.Queries.ListWorkspaces(ctx, user.ID)
+			if listErr == nil {
+				for _, workspace := range workspaces {
+					_ = testHandler.Queries.DeleteWorkspace(ctx, workspace.ID)
+				}
+			}
+		}
+		testPool.Exec(ctx, `DELETE FROM "user" WHERE email = $1`, email)
+	})
+
+	w := httptest.NewRecorder()
+	var buf bytes.Buffer
+	json.NewEncoder(&buf).Encode(map[string]string{"email": email, "code": "888888"})
+	req := httptest.NewRequest("POST", "/auth/verify-code", &buf)
+	req.Header.Set("Content-Type", "application/json")
+	testHandler.VerifyCode(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("VerifyCode (enabled dev code without DB record): expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestVerifyCodeRejectsConfiguredDevCodeInProduction(t *testing.T) {
 	t.Setenv(devVerificationCodeEnv, "888888")
 	t.Setenv("APP_ENV", "production")

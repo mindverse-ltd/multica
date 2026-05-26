@@ -363,11 +363,16 @@ export function LoginPage({
         onTokenObtained?.();
         onSuccess();
       } catch (err) {
-        setError(
-          err instanceof Error ? err.message : "Invalid or expired code",
-        );
+        const msg = err instanceof Error ? err.message : "Invalid or expired code";
+        setError(msg);
         setCode("");
         setLoading(false);
+        // Session expired — the bind_email token is stale. Clear the URL
+        // parameter and fall through to the normal login page so the user
+        // can start a fresh Feishu OAuth flow.
+        if (msg.toLowerCase().includes("session")) {
+          window.location.replace(window.location.pathname);
+        }
       }
     },
     [bindEmail, email, onSuccess, onTokenObtained, qc],
