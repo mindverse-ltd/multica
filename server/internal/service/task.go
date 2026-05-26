@@ -171,6 +171,16 @@ func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTas
 		s.taskAnalyticsContext(ctx, task),
 		taskDurationMS(task),
 	))
+	// Revoke any mat_ task tokens minted for this task. Cancellation is
+	// a terminal transition, so the running agent process no longer
+	// needs to call back; eagerly deleting the token closes the
+	// window where a compromised process could keep authenticating
+	// against the API until the 24h expiry. Failure is non-fatal — the
+	// expiry / FK cascade are the durable guards. MUL-2600.
+	if err := s.Queries.DeleteTaskTokensByTask(ctx, task.ID); err != nil {
+		slog.Warn("cancel task: failed to revoke task tokens",
+			"task_id", util.UUIDToString(task.ID), "error", err)
+	}
 }
 
 func (s *TaskService) captureTaskEvent(ctx context.Context, event analytics.Event) {
@@ -949,6 +959,13 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 
 	slog.Info("task started", "task_id", util.UUIDToString(task.ID), "issue_id", util.UUIDToString(task.IssueID))
 	s.captureTaskStarted(ctx, task)
+	// Tell every connected workspace WS client that this task transitioned
+	// dispatched → running. Without this, the workspace-wide
+	// `agentTaskSnapshot` query only refreshes on the 30s staleTime, so any
+	// UI that distinguishes "queued" from "running" (e.g. the issue-card
+	// agent activity indicator) lags by up to half a minute on the
+	// transition users care about most.
+	s.broadcastTaskEvent(ctx, protocol.EventTaskRunning, task)
 	return &task, nil
 }
 
@@ -1517,8 +1534,9 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 						)
 					} else if !hasActive {
 						if _, updateErr := s.Queries.UpdateIssueStatus(ctx, db.UpdateIssueStatusParams{
-							ID:     t.IssueID,
-							Status: "todo",
+							ID:          t.IssueID,
+							Status:      "todo",
+							WorkspaceID: issue.WorkspaceID,
 						}); updateErr != nil {
 							slog.Warn("handle failed tasks: reset stuck issue failed",
 								"issue_id", issueKey,
