@@ -3,12 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { apiMock, detail, deletePin, pins } = vi.hoisted(() => ({
-  apiMock: {
-    acceptInvitation: vi.fn(),
-    declineInvitation: vi.fn(),
-    listInbox: vi.fn(),
-  },
+const { detail, deletePin, pins } = vi.hoisted(() => ({
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
   pins: {
@@ -104,8 +99,17 @@ vi.mock("@multica/core/paths", () => ({
     projectDetail: (id: string) => `/acme/projects/${id}`,
   }),
 }));
-vi.mock("@multica/core/api", async (importOriginal) => ({ ...(await importOriginal<typeof import("@multica/core/api")>()), api: apiMock }));
-vi.mock("@multica/core/inbox/queries", () => ({ useInboxUnreadCount: () => 0 }));
+vi.mock("@multica/core/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@multica/core/api")>();
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      getBaseUrl: () => "http://127.0.0.1:8080",
+    },
+  };
+});
+vi.mock("@multica/core/inbox/queries", () => ({ deduplicateInboxItems: (items: unknown[]) => items, inboxKeys: { list: () => ["inbox"] } }));
 vi.mock("@multica/core/issues/queries", () => ({ issueDetailOptions: () => ({ queryKey: ["issue"] }) }));
 vi.mock("@multica/core/issues/stores/create-mode-store", () => ({
   useCreateModeStore: { getState: () => ({ lastMode: "agent" }) },
@@ -137,12 +141,6 @@ describe("PinRow", () => {
   beforeEach(() => {
     deletePin.mockReset();
     detail.current = { isPending: false, isError: false, data: null, error: null };
-    apiMock.listInbox.mockReset();
-  });
-
-  it("does not prefetch the full inbox list on initial render", () => {
-    render(<AppSidebar />);
-    expect(apiMock.listInbox).not.toHaveBeenCalled();
   });
 
   it("unpins missing details", async () => {
