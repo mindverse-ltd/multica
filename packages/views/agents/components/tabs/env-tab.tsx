@@ -49,6 +49,12 @@ function envMapToEntries(env: Record<string, string>): EnvEntry[] {
   }));
 }
 
+export function formatEnvText(env: Record<string, string>): string {
+  return Object.entries(env)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
 function entriesToEnvMap(entries: EnvEntry[]): Record<string, string> {
   const map: Record<string, string> = {};
   for (const entry of entries) {
@@ -60,12 +66,12 @@ function entriesToEnvMap(entries: EnvEntry[]): Record<string, string> {
   return map;
 }
 
-function entryWithKey(key: string, value: string): EnvEntry {
+function entryWithKey(key: string, value: string, visible = false): EnvEntry {
   return {
     id: nextEnvId++,
     key,
     value,
-    visible: false,
+    visible,
   };
 }
 
@@ -148,6 +154,7 @@ export function EnvTab({
       const env = resp.custom_env ?? {};
       setOriginalMap(env);
       setRevealed(envMapToEntries(env));
+      setBulkText(formatEnvText(env));
     } catch (err) {
       toast.error(
         err instanceof Error && err.message
@@ -208,33 +215,12 @@ export function EnvTab({
       );
       return;
     }
-    if (result.entries.length === 0) {
-      return;
-    }
 
-    const nextEntries: EnvEntry[] = [...(revealed ?? [])];
-    for (const parsedEntry of result.entries) {
-      const existingIndex = nextEntries.findIndex(
-        (entry) => entry.key.trim() === parsedEntry.key,
-      );
-      if (existingIndex >= 0) {
-        const existingEntry = nextEntries[existingIndex];
-        if (!existingEntry) {
-          continue;
-        }
-        nextEntries[existingIndex] = {
-          id: existingEntry.id,
-          key: parsedEntry.key,
-          value: parsedEntry.value,
-          visible: existingEntry.visible,
-        };
-      } else {
-        nextEntries.push(entryWithKey(parsedEntry.key, parsedEntry.value));
-      }
-    }
-
-    setRevealed(nextEntries);
-    setBulkText("");
+    setRevealed(
+      result.entries.map((parsedEntry) =>
+        entryWithKey(parsedEntry.key, parsedEntry.value, true),
+      ),
+    );
   };
 
   const handleSave = async () => {
@@ -254,6 +240,7 @@ export function EnvTab({
       const env = resp.custom_env ?? {};
       setOriginalMap(env);
       setRevealed(envMapToEntries(env));
+      setBulkText(formatEnvText(env));
       toast.success(t(($) => $.tab_body.env.saved_toast));
       onSaved?.();
     } catch (err) {
@@ -351,7 +338,6 @@ export function EnvTab({
             variant="outline"
             size="sm"
             onClick={handleBulkApply}
-            disabled={!bulkText.trim()}
             className="shrink-0"
           >
             <FileText className="h-3.5 w-3.5" />

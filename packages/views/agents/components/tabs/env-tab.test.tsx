@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enAgents from "../../../locales/en/agents.json";
-import { EnvTab, parseEnvText } from "./env-tab";
+import { EnvTab, formatEnvText, parseEnvText } from "./env-tab";
 
 const apiMocks = vi.hoisted(() => ({
   getAgentEnv: vi.fn(),
@@ -90,6 +90,14 @@ describe("parseEnvText", () => {
   });
 });
 
+describe("formatEnvText", () => {
+  it("formats one KEY=value pair per line", () => {
+    expect(formatEnvText({ FOO: "bar", TOKEN: "a=b=c" })).toBe(
+      "FOO=bar\nTOKEN=a=b=c",
+    );
+  });
+});
+
 describe("EnvTab bulk paste", () => {
   afterEach(() => {
     cleanup();
@@ -97,9 +105,25 @@ describe("EnvTab bulk paste", () => {
     vi.clearAllMocks();
   });
 
-  it("updates existing keys, appends new keys, and saves the parsed map", async () => {
+  it("prefills the bulk textarea after reveal", async () => {
     apiMocks.getAgentEnv.mockResolvedValue({
-      custom_env: { EXISTING: "old" },
+      custom_env: { EXISTING: "old", TOKEN: "a=b=c" },
+    });
+
+    renderEnvTab(makeAgent({ custom_env_key_count: 2 }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal & edit" }));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/ANTHROPIC_API_KEY/)).toHaveValue(
+        "EXISTING=old\nTOKEN=a=b=c",
+      );
+    });
+  });
+
+  it("replaces the env with the parsed map and saves omitted keys as removed", async () => {
+    apiMocks.getAgentEnv.mockResolvedValue({
+      custom_env: { EXISTING: "old", REMOVED: "gone" },
     });
     apiMocks.updateAgentEnv.mockResolvedValue({
       custom_env: { EXISTING: "new", ADDED: "value" },
@@ -120,6 +144,31 @@ describe("EnvTab bulk paste", () => {
         custom_env: { EXISTING: "new", ADDED: "value" },
       });
       expect(onSaved).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("can parse an empty textarea as an empty replacement map", async () => {
+    apiMocks.getAgentEnv.mockResolvedValue({
+      custom_env: { EXISTING: "old" },
+    });
+    apiMocks.updateAgentEnv.mockResolvedValue({
+      custom_env: {},
+    });
+
+    renderEnvTab(makeAgent({ custom_env_key_count: 1 }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Reveal & edit" }));
+
+    fireEvent.change(await screen.findByPlaceholderText(/ANTHROPIC_API_KEY/), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Parse" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(apiMocks.updateAgentEnv).toHaveBeenCalledWith("agent-1", {
+        custom_env: {},
+      });
     });
   });
 });
