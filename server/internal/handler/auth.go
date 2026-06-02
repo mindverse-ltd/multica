@@ -47,6 +47,7 @@ const defaultWorkspaceSlug = "mindverse-all"
 var supportedLanguages = map[string]struct{}{
 	"en":      {},
 	"zh-Hans": {},
+	"ko":      {},
 }
 
 type UserResponse struct {

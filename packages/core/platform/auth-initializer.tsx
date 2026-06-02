@@ -54,6 +54,13 @@ export function AuthInitializer({
           allowSignup: cfg.allow_signup,
           googleClientId: cfg.google_client_id,
           feishuAppId: cfg.feishu_app_id,
+          // Old servers omit this field — treat that as "creation allowed"
+          // (the managed-cloud default) rather than blocking the UI.
+          workspaceCreationDisabled: cfg.workspace_creation_disabled === true,
+        });
+        configStore.getState().setDaemonConfig({
+          daemonServerUrl: cfg.daemon_server_url,
+          daemonAppUrl: cfg.daemon_app_url,
         });
         if (cfg.posthog_key) {
           initAnalytics({

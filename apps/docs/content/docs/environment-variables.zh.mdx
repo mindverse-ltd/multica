@@ -49,9 +49,10 @@ Multica 支持两种邮件发送通道——[Resend](https://resend.com/) 适合
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `SMTP_HOST` | 空 | SMTP relay 主机名。设置后即启用 SMTP 模式并覆盖 Resend |
-| `SMTP_PORT` | `25` | SMTP 端口。STARTTLS 提交端口用 `587`；**暂不支持 465（SMTPS / 隐式 TLS）** |
+| `SMTP_PORT` | `25` | SMTP 端口。STARTTLS 提交端口用 `587`；SMTPS（隐式 TLS，自动启用）用 `465` |
 | `SMTP_USERNAME` | 空 | SMTP 用户名。留空表示未认证 relay |
 | `SMTP_PASSWORD` | 空 | SMTP 密码 |
+| `SMTP_TLS` | `starttls` | TLS 模式。`implicit`（别名 `smtps`、`ssl`）在连接时立即进行 TLS 握手（SMTPS）；`465` 端口会自动启用。未设置 / `starttls` 则在连接后通过 STARTTLS 升级 |
 | `SMTP_TLS_INSECURE` | `false` | 设为 `true` 跳过 TLS 证书校验（仅限私有 CA / 自签证书）|
 
 服务端 advertise STARTTLS 时会自动升级。dial 超时 10s，整个 SMTP 会话有 30s deadline，避免 relay 黑洞把 auth handler 挂死。
@@ -128,6 +129,22 @@ Multica 存储用户上传的附件（评论里的图片、文件等）。**优�
 
 **邀请流程本身不检查 signup 白名单**——但被邀请人必须先能**登录**才能接受邀请。如果对方已经有 Multica 账号（比如在其他工作区注册过），可以直接接受，不受白名单影响；**如果对方还没注册过**，他们登录的第一步（发送验证码）仍然会过白名单检查，被 `ALLOW_SIGNUP=false` 或 `ALLOWED_EMAILS` / `ALLOWED_EMAIL_DOMAINS` 拒绝的邮箱**无法完成注册，也就没法接受邀请**。
 
+## 锁死工作区创建
+
+`ALLOW_SIGNUP=false` 能挡住新注册，但**挡不住**已经登录的用户继续 `POST /api/workspaces` 自助开新工作区。在希望平台管理员能看到全部 issue / 仓库 / 智能体的自部署实例里，把 `DISABLE_WORKSPACE_CREATION=true` 打开以堵上这个口子。
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `DISABLE_WORKSPACE_CREATION` | `false` | 设为 `true` 时，对 `POST /api/workspaces` 的任何调用都返回 `403 workspace creation is disabled for this instance`。Web UI 通过 `/api/config` 隐藏所有「创建工作区」入口。该开关是实例级的，没有 owner / admin 例外 |
+
+推荐的开服流程：
+
+1. 启动实例时保持 `DISABLE_WORKSPACE_CREATION` 未设置（默认）。
+2. 管理员登录并创建共享工作区。
+3. 把 `DISABLE_WORKSPACE_CREATION=true` 设上并重启 backend。之后新用户只能通过邀请加入。
+
+如果还想让被邀请的新用户能完成首次注册，保留 `ALLOW_SIGNUP=true`（必要时用 `ALLOWED_EMAIL_DOMAINS` / `ALLOWED_EMAILS` 限定可注册邮箱），只把 `DISABLE_WORKSPACE_CREATION=true` 打开即可；如果同时设 `ALLOW_SIGNUP=false`，连有 pending invite 的邮箱都无法完成首次注册，仅适合所有成员都已有 Multica 账号的实例。
+
 ## 速率限制（可选 Redis）
 
 公开认证端点——`/auth/send-code`、`/auth/verify-code`、`/auth/google`——前面挂了按 IP 的固定窗口限流。限流器后端是 Redis。`REDIS_URL` 不设时中间件**直通**（fail-open），后端启动会打日志 `rate limiting disabled: REDIS_URL not configured`。
@@ -169,6 +186,8 @@ Multica 存储用户上传的附件（评论里的图片、文件等）。**优�
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `FRONTEND_ORIGIN` | 空 | 前端地址。邀请邮件里的链接、CORS 白名单、cookie domain 都从这里推导。邮件链接在不设时会 fallback 到托管版域名 `https://app.multica.ai`——self-host 必须显式填 |
+| `MULTICA_APP_URL` | 空 | CLI 登录流程使用的前端 URL。Web UI 也会用它显示带你自己 app domain 的 self-host 守护进程 setup 命令；同源部署中，如果 `MULTICA_PUBLIC_URL` 未设置，它也会作为守护进程的 `server_url` |
+| `MULTICA_PUBLIC_URL` | 空 | 公开 API URL，不带结尾 slash。用于 autopilot webhook URL，也会被 Web UI 用作守护进程的 `server_url` |
 | `CORS_ALLOWED_ORIGINS` | 空 | 额外的 CORS 允许来源（逗号分隔）|
 | `ALLOWED_ORIGINS` | 空 | WebSocket 专用的 origin 白名单（逗号分隔）；不设就按 `CORS_ALLOWED_ORIGINS` → `FRONTEND_ORIGIN` → `localhost:3000/5173/5174` 顺序回落 |
 

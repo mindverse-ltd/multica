@@ -6,11 +6,22 @@ interface ConfigState {
   allowSignup: boolean;
   googleClientId: string;
   feishuAppId: string;
+  daemonServerUrl: string;
+  daemonAppUrl: string;
+  // Self-host gate (#3433): when true, every "Create workspace" affordance
+  // must be hidden. Defaults to false so unknown / older servers behave like
+  // the managed-cloud case.
+  workspaceCreationDisabled: boolean;
   setCdnDomain: (domain: string) => void;
   setAuthConfig: (config: {
     allowSignup: boolean;
     googleClientId?: string;
     feishuAppId?: string;
+    workspaceCreationDisabled?: boolean;
+  }) => void;
+  setDaemonConfig: (config: {
+    daemonServerUrl?: string;
+    daemonAppUrl?: string;
   }) => void;
 }
 
@@ -19,9 +30,14 @@ export const configStore = createStore<ConfigState>((set) => ({
   allowSignup: true,
   googleClientId: "",
   feishuAppId: "",
+  daemonServerUrl: "",
+  daemonAppUrl: "",
+  workspaceCreationDisabled: false,
   setCdnDomain: (domain) => set({ cdnDomain: domain }),
-  setAuthConfig: ({ allowSignup, googleClientId = "", feishuAppId = "" }) =>
-    set({ allowSignup, googleClientId, feishuAppId }),
+  setAuthConfig: ({ allowSignup, googleClientId = "", feishuAppId = "", workspaceCreationDisabled = false }) =>
+    set({ allowSignup, googleClientId, feishuAppId, workspaceCreationDisabled }),
+  setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
+    set({ daemonServerUrl, daemonAppUrl }),
 }));
 
 export function useConfigStore(): ConfigState;
