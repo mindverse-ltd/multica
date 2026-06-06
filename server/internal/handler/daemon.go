@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/daemonws"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -93,9 +94,21 @@ func (h *Handler) requireDaemonRuntimeAccess(w http.ResponseWriter, r *http.Requ
 
 // requireDaemonTaskAccess looks up a task and verifies the caller owns its workspace.
 func (h *Handler) requireDaemonTaskAccess(w http.ResponseWriter, r *http.Request, taskID string) (db.AgentTaskQueue, bool) {
+	task, _, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	return task, ok
+}
+
+// requireDaemonTaskAccessWithWorkspace is the workspace-aware variant of
+// requireDaemonTaskAccess. It returns the resolved workspace ID alongside
+// the task row so callers that need to forward workspace_id into
+// taskToResponse (powering RelativeWorkDir) don't have to repeat the
+// ResolveTaskWorkspaceID lookup. The two helpers share their entire
+// implementation; the simpler one is preserved for ergonomic call sites
+// that genuinely don't need workspace_id.
+func (h *Handler) requireDaemonTaskAccessWithWorkspace(w http.ResponseWriter, r *http.Request, taskID string) (db.AgentTaskQueue, string, bool) {
 	taskUUID, ok := parseUUIDOrBadRequest(w, taskID, "task_id")
 	if !ok {
-		return db.AgentTaskQueue{}, false
+		return db.AgentTaskQueue{}, "", false
 	}
 	task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
 	if err != nil {
@@ -104,23 +117,23 @@ func (h *Handler) requireDaemonTaskAccess(w http.ResponseWriter, r *http.Request
 		// error must not be reported as a deletion.
 		if isNotFound(err) {
 			writeError(w, http.StatusNotFound, "task not found")
-			return db.AgentTaskQueue{}, false
+			return db.AgentTaskQueue{}, "", false
 		}
 		slog.Warn("get agent task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to load task")
-		return db.AgentTaskQueue{}, false
+		return db.AgentTaskQueue{}, "", false
 	}
 
 	wsID := h.TaskService.ResolveTaskWorkspaceID(r.Context(), task)
 	if wsID == "" {
 		writeError(w, http.StatusNotFound, "task not found")
-		return db.AgentTaskQueue{}, false
+		return db.AgentTaskQueue{}, "", false
 	}
 
 	if !h.requireDaemonWorkspaceAccess(w, r, wsID) {
-		return db.AgentTaskQueue{}, false
+		return db.AgentTaskQueue{}, "", false
 	}
-	return task, true
+	return task, wsID, true
 }
 
 // verifyDaemonWorkspaceAccess checks workspace access without writing an HTTP error.
@@ -331,7 +344,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			OwnerID:     ownerID,
 		})
 		if err != nil {
-			h.Analytics.Capture(analytics.RuntimeFailed(
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
 				uuidToString(ownerID),
 				req.WorkspaceID,
 				req.DaemonID,
@@ -364,7 +377,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		// Inserted is false for normal daemon reconnects/upserts, so
 		// runtime_ready is a first-ready-per-runtime-row signal.
 		if row.Inserted {
-			h.Analytics.Capture(analytics.RuntimeRegistered(
+			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
 				uuidToString(ownerID),
 				req.WorkspaceID,
 				uuidToString(registered.ID),
@@ -374,7 +387,7 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 				req.CLIVersion,
 			))
 			if registered.Status == "online" {
-				h.Analytics.Capture(analytics.RuntimeReady(
+				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeReady(
 					uuidToString(ownerID),
 					req.WorkspaceID,
 					uuidToString(registered.ID),
@@ -548,7 +561,7 @@ func (h *Handler) DaemonDeregister(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("deregister: failed to set offline", "runtime_id", rid, "error", err)
 			continue
 		}
-		h.Analytics.Capture(analytics.RuntimeOffline(
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeOffline(
 			uuidToString(rt.OwnerID),
 			wsID,
 			uuidToString(rt.ID),
@@ -1095,9 +1108,13 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	buildStart = time.Now()
 
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
-	resp := taskToResponse(*task)
+	resp := taskToResponse(*task, runtimeWorkspaceID)
 	if agent, err := h.Queries.GetAgent(r.Context(), task.AgentID); err == nil {
+		// Workspace-bound skills first, then platform built-in skills. Built-in
+		// names carry a "multica-" prefix so their on-disk slugs never collide
+		// with a user-authored workspace skill (see writeSkillFiles).
 		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
+		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
 			if err := json.Unmarshal(agent.CustomEnv, &customEnv); err != nil {
@@ -1240,6 +1257,10 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		if task.TriggerCommentID.Valid {
 			if comment, err := h.Queries.GetComment(r.Context(), task.TriggerCommentID); err == nil {
 				resp.TriggerCommentContent = comment.Content
+				resp.TriggerThreadID = uuidToString(comment.ID)
+				if comment.ParentID.Valid {
+					resp.TriggerThreadID = uuidToString(comment.ParentID)
+				}
 				resp.TriggerAuthorType = comment.AuthorType
 				switch comment.AuthorType {
 				case "agent":
@@ -1257,6 +1278,30 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
+				// Count comments that arrived issue-wide since this agent's last
+				// run, so the daemon can tell it the full catch-up volume up front
+				// (the prompt then steers it to read the triggering thread first).
+				// Anchor = the prior task's started_at (never completed_at: a long
+				// run would miss comments posted while it ran). Cold start (no prior
+				// task) → no anchor → no hint. Excludes the agent's own comments and
+				// the triggering comment itself because that body is already
+				// injected into the prompt. Best-effort: any DB error or zero count
+				// leaves the hint suppressed.
+				if startedAt, err := h.Queries.GetLastTaskStartedAtForIssueAndAgent(r.Context(), db.GetLastTaskStartedAtForIssueAndAgentParams{
+					AgentID: task.AgentID,
+					IssueID: comment.IssueID,
+				}); err == nil && startedAt.Valid {
+					if cnt, err := h.Queries.CountNewCommentsSince(r.Context(), db.CountNewCommentsSinceParams{
+						AnchorID:    task.TriggerCommentID,
+						IssueID:     comment.IssueID,
+						WorkspaceID: comment.WorkspaceID,
+						Since:       startedAt,
+						AuthorID:    task.AgentID,
+					}); err == nil && cnt > 0 {
+						resp.NewCommentCount = int(cnt)
+						resp.NewCommentsSince = startedAt.Time.UTC().Format(time.RFC3339)
+					}
+				}
 			}
 		}
 
@@ -1266,18 +1311,19 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// Skip all prior state when the task was flagged as a manual rerun:
 		// the user just judged the prior output bad, so the daemon must start a
 		// fresh agent session in a fresh workdir instead of resuming anything
-		// from the same conversation that produced that output. For
-		// comment-triggered follow-ups, skip only the session resume: resumed
-		// issue conversations often inherit the prior final assistant message
-		// (for example "Done.") and answer a new human comment with that stale
-		// completion marker instead of the comment itself. Keep reusing the
-		// workdir for comment follow-ups so the agent still sees the same checkout.
+		// from the same conversation that produced that output.
 		if !task.ForceFreshSession {
 			if prior, err := h.Queries.GetLastTaskSession(r.Context(), db.GetLastTaskSessionParams{
 				AgentID: task.AgentID,
 				IssueID: task.IssueID,
 			}); err == nil && prior.SessionID.Valid {
-				if !task.TriggerCommentID.Valid && prior.RuntimeID == task.RuntimeID {
+				// Resume the prior session when it ran on the same runtime —
+				// including comment-triggered follow-ups, so the agent keeps the
+				// issue's conversation context across turns. The "Focus on THIS
+				// comment" guard in prompt.go defends against inheriting the prior
+				// turn's "Done." marker, and GetLastTaskSession already excludes
+				// poisoned sessions.
+				if prior.RuntimeID == task.RuntimeID {
 					resp.PriorSessionID = prior.SessionID.String
 				}
 				if prior.WorkDir.Valid {
@@ -1322,32 +1368,40 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			// Load the latest user message for the chat prompt, plus any
-			// attachments linked to that exact message. Without the structured
-			// attachment list the agent only sees the markdown URL in
-			// `ChatMessage` — fine for vision models inline but unusable when
-			// the agent wants to `multica attachment download <id>` (URL is
-			// signed and 30-min expiring on private CDN).
+			// Build the chat prompt from EVERY user message that has arrived
+			// since the agent's last reply — not just the most recent one. A
+			// short-window debounce (MUL-2968) can land several user messages
+			// before a single run fires; the agent resumes its prior session
+			// and only learns of new input through resp.ChatMessage, so
+			// delivering just the latest message would silently drop the
+			// earlier ones (e.g. "看上海天气" then "还有青岛" → only Qingdao
+			// answered). The unanswered set is the trailing run of user
+			// messages after the last assistant message (every completed or
+			// failed run writes an assistant row, so that anchor advances each
+			// turn). Attachments are collected from each included message so
+			// the agent can `multica attachment download <id>` — the markdown
+			// URL alone is signed and 30-min expiring on the private CDN.
 			if msgs, err := h.Queries.ListChatMessages(r.Context(), cs.ID); err == nil && len(msgs) > 0 {
-				for i := len(msgs) - 1; i >= 0; i-- {
-					if msgs[i].Role == "user" {
-						resp.ChatMessage = msgs[i].Content
-						if atts, attErr := h.Queries.ListAttachmentsByChatMessage(r.Context(), db.ListAttachmentsByChatMessageParams{
-							ChatMessageID: msgs[i].ID,
-							WorkspaceID:   parseUUID(resp.WorkspaceID),
-						}); attErr == nil && len(atts) > 0 {
-							resp.ChatMessageAttachments = make([]ChatAttachmentMeta, len(atts))
-							for j, a := range atts {
-								resp.ChatMessageAttachments[j] = ChatAttachmentMeta{
-									ID:          uuidToString(a.ID),
-									Filename:    a.Filename,
-									ContentType: a.ContentType,
-								}
-							}
+				unanswered := trailingUserMessages(msgs)
+				parts := make([]string, 0, len(unanswered))
+				for _, m := range unanswered {
+					if strings.TrimSpace(m.Content) != "" {
+						parts = append(parts, m.Content)
+					}
+					if atts, attErr := h.Queries.ListAttachmentsByChatMessage(r.Context(), db.ListAttachmentsByChatMessageParams{
+						ChatMessageID: m.ID,
+						WorkspaceID:   parseUUID(resp.WorkspaceID),
+					}); attErr == nil && len(atts) > 0 {
+						for _, a := range atts {
+							resp.ChatMessageAttachments = append(resp.ChatMessageAttachments, ChatAttachmentMeta{
+								ID:          uuidToString(a.ID),
+								Filename:    a.Filename,
+								ContentType: a.ContentType,
+							})
 						}
-						break
 					}
 				}
+				resp.ChatMessage = strings.Join(parts, "\n\n")
 			}
 		}
 	}
@@ -1596,14 +1650,35 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"task": resp})
 }
 
+// trailingUserMessages returns the run of user messages after the last
+// assistant message in a chronologically-ordered chat history — the set the
+// agent has NOT yet replied to. The agent resumes its prior session and only
+// learns of new input through the claim response's chat_message, so a single
+// run that covers a debounced burst (MUL-2968) must deliver every one of
+// these, not just the latest. Every completed or failed run writes an
+// assistant row, so the anchor advances one turn at a time; the result is the
+// whole slice on the first turn and exactly the new message(s) thereafter.
+func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
+	start := 0
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role != "user" {
+			start = i + 1
+			break
+		}
+	}
+	return msgs[start:]
+}
+
 // ListPendingTasksByRuntime returns queued/dispatched tasks for a runtime.
 func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Request) {
 	runtimeID := chi.URLParam(r, "runtimeId")
 
 	// Verify the caller owns this runtime's workspace.
-	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
 		return
 	}
+	workspaceID := uuidToString(runtime.WorkspaceID)
 
 	tasks, err := h.Queries.ListPendingTasksByRuntime(r.Context(), parseUUID(runtimeID))
 	if err != nil {
@@ -1613,7 +1688,7 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 
 	resp := make([]AgentTaskResponse, len(tasks))
 	for i, t := range tasks {
-		resp[i] = taskToResponse(t)
+		resp[i] = taskToResponse(t, workspaceID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -1628,7 +1703,8 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
 		return
 	}
 
@@ -1640,7 +1716,7 @@ func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task started", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
-	writeJSON(w, http.StatusOK, taskToResponse(*task))
+	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 // TaskWaitLocalDirectoryRequest is the body the daemon POSTs when it parks
@@ -1660,7 +1736,8 @@ type TaskWaitLocalDirectoryRequest struct {
 func (h *Handler) MarkTaskWaitingLocalDirectory(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
 		return
 	}
 
@@ -1679,7 +1756,7 @@ func (h *Handler) MarkTaskWaitingLocalDirectory(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	writeJSON(w, http.StatusOK, taskToResponse(*task))
+	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 // ReportTaskProgress broadcasts a progress update.
@@ -1727,7 +1804,8 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
 		return
 	}
 
@@ -1758,7 +1836,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
-	writeJSON(w, http.StatusOK, taskToResponse(*task))
+	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at
@@ -1790,7 +1868,7 @@ func (h *Handler) emitIssueExecutedOnFirstCompletion(r *http.Request, task *db.A
 	if marked.CreatorType == "agent" {
 		distinct = "agent:" + distinct
 	}
-	h.Analytics.Capture(analytics.IssueExecuted(
+	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.IssueExecuted(
 		distinct,
 		uuidToString(marked.WorkspaceID),
 		uuidToString(marked.ID),
@@ -1818,7 +1896,8 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
+	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
+	if !ok {
 		return
 	}
 
@@ -1841,7 +1920,9 @@ func (h *Handler) ReportTaskUsage(w http.ResponseWriter, r *http.Request) {
 			CacheWriteTokens: u.CacheWriteTokens,
 		}); err != nil {
 			slog.Warn("upsert task usage failed", "task_id", taskID, "model", u.Model, "error", err)
+			continue
 		}
+		h.TaskService.CaptureTaskUsage(r.Context(), task, u.Provider, u.Model, u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -1873,7 +1954,8 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	if _, ok := h.requireDaemonTaskAccess(w, r, taskID); !ok {
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
 		return
 	}
 
@@ -1898,7 +1980,7 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
-	writeJSON(w, http.StatusOK, taskToResponse(*task))
+	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
 // ---------------------------------------------------------------------------
@@ -2056,9 +2138,10 @@ func (h *Handler) GetActiveTaskForIssue(w http.ResponseWriter, r *http.Request) 
 		tasks = nil
 	}
 
+	workspaceID := uuidToString(issue.WorkspaceID)
 	resp := make([]AgentTaskResponse, len(tasks))
 	for i, t := range tasks {
-		resp[i] = taskToResponse(t)
+		resp[i] = taskToResponse(t, workspaceID)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"tasks": resp})
@@ -2090,7 +2173,7 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))
-	writeJSON(w, http.StatusOK, taskToResponse(*task))
+	writeJSON(w, http.StatusOK, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
 }
 
 // ListTasksByIssue returns all tasks (any status) for an issue — used for execution history.
@@ -2107,9 +2190,10 @@ func (h *Handler) ListTasksByIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	workspaceID := uuidToString(issue.WorkspaceID)
 	resp := make([]AgentTaskResponse, len(tasks))
 	for i, t := range tasks {
-		resp[i] = taskToResponse(t)
+		resp[i] = taskToResponse(t, workspaceID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)

@@ -65,7 +65,7 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
-export type { ChatSession, ChatMessage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse } from "./chat";
+export type { ChatSession, ChatMessage, ChatMessagesPage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse } from "./chat";
 export type { StorageAdapter } from "./storage";
 export type {
   Project,
@@ -93,6 +93,13 @@ export type {
   ListGitHubInstallationsResponse,
   GitHubConnectResponse,
 } from "./github";
+export type {
+  LarkInstallation,
+  ListLarkInstallationsResponse,
+  BeginLarkInstallResponse,
+  LarkInstallStatusResponse,
+  RedeemLarkBindingTokenResponse,
+} from "./lark";
 export type {
   Autopilot,
   AutopilotStatus,
@@ -134,3 +141,21 @@ export type {
   SquadMemberStatus,
   SquadMemberStatusListResponse,
 } from "./squad";
+export type {
+  BillingBalance,
+  BillingTransaction,
+  BillingTransactionsPage,
+  BillingTxType,
+  BillingTxSource,
+  BillingBatch,
+  BillingBatchesPage,
+  BillingBatchSourceType,
+  BillingTopup,
+  BillingTopupsPage,
+  BillingTopupStatus,
+  BillingPriceTier,
+  CreateBillingCheckoutSessionRequest,
+  CreateBillingCheckoutSessionResponse,
+  BillingCheckoutSessionStatus,
+  CreateBillingPortalSessionResponse,
+} from "./billing";

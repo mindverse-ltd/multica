@@ -101,7 +101,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       label: "RUNTIMES",
       title: "One dashboard for all your compute",
       description:
-        "Local daemons and cloud runtimes, managed from a single panel. Real-time monitoring of online/offline status, usage charts, and activity heatmaps. Auto-detects 11 supported coding tools on your machine.",
+        "Local daemons and cloud runtimes, managed from a single panel. Real-time monitoring of online/offline status, usage charts, and activity heatmaps. Auto-detects 12 supported coding tools on your machine.",
       cards: [
         {
           title: "Unified runtime panel",
@@ -116,7 +116,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
         {
           title: "Auto-detection on first run",
           description:
-            "Multica scans for 11 supported coding tools \u2014 Claude Code, Codex, Cursor, Copilot, Gemini, Hermes, Kimi, Kiro CLI, OpenCode, OpenClaw, and Pi \u2014 and registers a runtime for each one it finds.",
+            "Multica scans for 12 supported coding tools \u2014 Antigravity, Claude Code, Codex, Cursor, Copilot, Gemini, Hermes, Kimi, Kiro CLI, OpenCode, OpenClaw, and Pi \u2014 and registers a runtime for each one it finds.",
         },
       ],
     },
@@ -136,7 +136,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         title: "Install the CLI & connect your machine",
         description:
-          "Run multica setup \u2014 it walks you through OAuth, starts the daemon, and scans for the 11 supported coding tools (Claude Code, Codex, Cursor, Copilot, Gemini, Hermes, Kimi, Kiro CLI, OpenCode, OpenClaw, Pi). Whichever ones you already have installed get registered as runtimes automatically.",
+          "Run multica setup \u2014 it walks you through OAuth, starts the daemon, and scans for the 12 supported coding tools (Antigravity, Claude Code, Codex, Cursor, Copilot, Gemini, Hermes, Kimi, Kiro CLI, OpenCode, OpenClaw, Pi). Whichever ones you already have installed get registered as runtimes automatically.",
       },
       {
         title: "Create your first agent",
@@ -192,7 +192,7 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       {
         question: "What coding agents does Multica support?",
         answer:
-          "Multica supports 11 coding tools out of the box: Claude Code, Codex, Cursor, Copilot, Gemini, Hermes, Kimi, Kiro CLI, OpenCode, OpenClaw, and Pi. The daemon auto-detects whichever CLIs you already have installed and registers a runtime for each one. Since it's open source, you can also add your own backends.",
+          "Multica supports 12 coding tools out of the box: Antigravity, Claude Code, Codex, Cursor, Copilot, Gemini, Hermes, Kimi, Kiro CLI, OpenCode, OpenClaw, and Pi. The daemon auto-detects whichever CLIs you already have installed and registers a runtime for each one. Since it's open source, you can also add your own backends.",
       },
       {
         question: "Do I need to self-host, or is there a cloud version?",
@@ -292,6 +292,215 @@ export function createEnDict(allowSignup: boolean): LandingDict {
       fixes: "Bug Fixes",
     },
     entries: [
+      {
+        version: "0.3.17",
+        date: "2026-06-05",
+        title: "Feishu Bot Group Chat, Usage Scheduling, and CLI Updates",
+        changes: [],
+        features: [
+          "Feishu Bot group mentions now include nearby conversation context, so the responding agent can understand what the team was discussing before it was mentioned",
+          "Admins can disconnect a Feishu Bot directly from the agent integrations area without detouring through Settings",
+          "Self-hosted workspaces now keep usage rollups running without requiring a separate cron setup",
+          "The CLI can create and update agents from external MCP configuration files",
+        ],
+        improvements: [
+          "Large Issue descriptions and long markdown drafts open much faster in the editor",
+          "Cloud setup guidance for adding a computer is more reliable and avoids saving unreachable server settings",
+          "Pageview analytics are cleaner and focus on meaningful site sections instead of noisy URL variations",
+          "Self-hosting docs now lead with the built-in usage scheduler and keep older cron-based paths as compatibility notes",
+          "Assignment workflows now preserve the assigned agent identity more consistently",
+          "Issue comment and reply composers are cleaner, auto-growing as you type without extra expand controls",
+        ],
+        fixes: [
+          "Image uploads keep the cursor in the right place and no longer grow when markdown is edited repeatedly",
+          "Copy buttons now work on self-hosted HTTP deployments, including code blocks, links, commands, and payload previews",
+          "Agent runs now time out only after inactivity instead of ending because of a fixed wall-clock limit",
+          "Agent configuration values for Claude Code now reach the child process while internal session markers stay private",
+          "Inbox notification mute checks and desktop notification routing now respect the source workspace",
+          "GitHub installations now show the connected account name right after installation",
+          "Model discovery waits consistently and does not hide available choices after an empty result",
+          "Self-hosted Feishu environment variables are accepted correctly",
+        ],
+      },
+      {
+        version: "0.3.16",
+        date: "2026-06-04",
+        title: "Lark Bot Integration",
+        changes: [],
+        features: [
+          "Multica now supports Lark as a third-party integration, so teams can scan a QR code and create a Multica agent as a Lark Bot",
+          "Chat now has a searchable agent picker and an explicit context picker, making it easier to choose who should respond and what they should see",
+          "Descriptions and comments now support checkbox task lists for lightweight planning inside an Issue",
+          "Agents now include built-in Multica skills so they can follow workspace workflows more consistently",
+        ],
+        improvements: [
+          "Chat context is represented with clear mentions, making handoffs and later review easier to understand",
+          "Self-hosted email setup is clearer for teams using custom mail delivery",
+          "Usage analytics focus more tightly on product signals and avoid sending operational background activity",
+        ],
+        fixes: [
+          "Attachments download reliably from private storage without opening a blank browser tab",
+          "Every user message reaches the agent even when several chat messages are sent quickly",
+          "Desktop now explains when login has expired instead of staying stuck while starting",
+          "Pinned sidebar items no longer linger after switching workspaces",
+          "Reused runtimes refresh Skills cleanly instead of accumulating duplicate Skill folders",
+          "OpenCode model choices remain available even when setup checks return partial results",
+          "Comment-triggered agent runs stay attached to the right conversation thread",
+          "The CLI now treats missing Issue metadata as an empty result instead of an error",
+        ],
+      },
+      {
+        version: "0.3.15",
+        date: "2026-06-03",
+        title: "Text Highlights + More Stable Agent Runs",
+        changes: [],
+        features: [
+          "Descriptions and comments now support highlighted text, making important notes easier to scan",
+        ],
+        improvements: [
+          "Chat loads messages faster and keeps live updates smoother during long conversations",
+          "Task failures now show clearer reasons, so teams can understand and recover from failed work more quickly",
+        ],
+        fixes: [
+          "Issue start and due dates stay on the selected calendar day across time zones",
+          "Skill setup no longer fails when the same supporting Skill file is included more than once",
+          "OpenCode model discovery waits longer before timing out, reducing false setup failures",
+          "Editor suggestion menus close reliably when focus moves outside them",
+          "Starting several server instances at once no longer risks overlapping setup work",
+        ],
+      },
+      {
+        version: "0.3.14",
+        date: "2026-06-02",
+        title: "Japanese Support and /skill Command",
+        changes: [],
+        features: [
+          "Multica now supports Japanese across the app, site, and docs",
+          "Chat now supports a /skill command for choosing an agent Skill",
+          "Workspaces can now show a custom logo",
+          "Teams can add Skills to an agent without replacing existing Skills",
+          "OpenCode agents now support thinking variants",
+        ],
+        improvements: [
+          "Existing users who skipped the onboarding source question can now answer it later without restarting onboarding",
+          "Retired agents now appear as Archived everywhere instead of looking offline or still active",
+          "Chat history and Issue execution rows have cleaner hover actions with less truncation and overlap",
+          "Project Issue filters now apply the agents-working filter consistently across list, board, and timeline views",
+        ],
+        fixes: [
+          "Users without access can no longer trigger private squad leaders through indirect Issue or comment paths",
+          "Project progress counters and reopened agent work now refresh more reliably",
+          "Desktop and web recover better from blank workspace states, no-access pages, renderer errors, and renderer crashes",
+          "Images and file cards keep rendering when names contain Markdown characters",
+          "Chat, labels, and invitations refresh correctly after a realtime reconnect",
+          "Run-only autopilot tasks, quick-create tasks, and their retries can be cancelled from the activity view",
+          "Skill descriptions with multi-line frontmatter now import and display correctly",
+          "Windows Copilot runs preserve multiline prompts and clean up shell-style custom arguments",
+        ],
+      },
+      {
+        version: "0.3.13",
+        date: "2026-06-01",
+        title: "Skill Search and CLI Updates",
+        changes: [],
+        features: [
+          "The CLI can now search Skills and list pull requests linked to an Issue, making release checks and automation audits easier from the terminal",
+          "Teams can change squad member roles from the CLI without opening the app",
+          "Agent lists can be filtered by runtime machine, so teams can quickly find the agents tied to a device or local service",
+          "SMTP relays now support secure SMTPS connections on port 465",
+          "OpenCode runtimes can use MCP settings saved on an agent",
+          "OpenCode agents now expose model variants as thinking controls and pass the selected effort through the runtime",
+        ],
+        improvements: [
+          "Mobile Issue headers now use cleaner controls that stay easier to reach on small screens",
+          "Chat history rows show running states and actions more predictably",
+          "Importing the same Skill twice now reports a clear result instead of interrupting the flow",
+        ],
+        fixes: [
+          "Replies stay attached to the exact comment they were sent under",
+          "Claude runs are less likely to stall while prompts are being sent",
+          "Self-hosted local runtime setup links now point users to the right addresses",
+          "MCP setup guidance and runtime support checks now match what the product can run",
+          "Execution logs now clear active-row highlights after the related work finishes",
+        ],
+      },
+      {
+        version: "0.3.12",
+        date: "2026-05-29",
+        title: "Issue Session Resume and Korean Support",
+        changes: [],
+        features: [
+          "Agents that continue work from an Issue comment now resume the previous session instead of starting over, keeping the task context intact",
+          "Multica now supports Korean across the app, public site, and documentation, including Korean docs pages and localized date formatting",
+          "Issue pages now keep active agent work visible near the title, with a cleaner view when multiple agents are working at once",
+          "Agents can scan Issue discussions faster with thread previews, reply counts, and recent activity before opening the full conversation",
+          "OpenClaw runtimes can use the MCP setup saved on an agent, and Claude Opus 4.8 is available in model selection and usage estimates",
+        ],
+        improvements: [
+          "Detail pages now share clearer breadcrumb headers, making Issues, projects, runtimes, skills, agents, and squads feel more consistent",
+          "Resumed agent tasks spend less time re-reading comments they already have, so follow-up work returns to the right discussion faster",
+          "Issue mention guidance and CLI command snippets are easier to read and safer to copy",
+        ],
+        fixes: [
+          "Agent skills stay visible after updates, archive, restore, template creation, and environment changes",
+          "Parent Issues assigned to a single agent continue when that agent completes a child Issue",
+          "Desktop now groups WSL2 local runtimes under the local machine when they belong to the current user",
+          "CLI login now accepts Cloud Node tokens",
+        ],
+      },
+      {
+        version: "0.3.11",
+        date: "2026-05-28",
+        title: "Antigravity CLI Support",
+        changes: [],
+        features: [
+          "Antigravity CLI is now a supported coding runtime",
+          "Agent settings now include MCP configuration for Hermes, Kimi, and Kiro",
+          "Self-hosted admins can turn off self-service workspace creation",
+          "Desktop local runtimes can renew access tokens before they expire",
+        ],
+        improvements: [
+          "Helm charts can be published to GHCR, and email setup docs are clearer",
+          "Task transcripts show shorter, safer working-folder labels",
+          "New Issues stay at the top in manual boards, and deleted Issues stay out of recents",
+          "Local runtime machines are grouped by device name",
+        ],
+        fixes: [
+          "Terminal task completion retries brief callback failures",
+          "Local-directory runs preserve existing CLAUDE.md, AGENTS.md, and GEMINI.md files",
+          "Windows Pi runs keep multi-line prompts intact",
+          "Provider logos render consistently",
+          "Daemon cleanup skips incomplete parent-task metadata",
+        ],
+      },
+      {
+        version: "0.3.10",
+        date: "2026-05-27",
+        title: "Local Working Directories",
+        changes: [],
+        features: [
+          "Projects can now use a local working directory on Desktop, so tasks can run in an existing folder while Multica shows when another task is waiting for that directory",
+          "Autopilot webhook triggers can now filter incoming events and actions before work starts, with docs linked directly from the setup flow",
+          "Swimlane views can group Issues by parent Issue, project, or assignee, making large boards easier to slice by how the team plans work",
+          "Comments now support selecting multiple attachments and keeping, removing, or replacing attachments while editing",
+        ],
+        improvements: [
+          "Chinese product copy is more consistent across navigation, settings, search, and runtime screens",
+          "The frontend codebase received accessibility and React cleanup across common screens, and mobile checks now run only when mobile code changes",
+          "CLI list output is cleaner for automated readers, and squad lists now show member counts when available",
+        ],
+        fixes: [
+          "Swimlane lanes no longer appear empty when nested Issues load beyond the first page",
+          "Creating a sub-Issue with an intelligent agent now preserves the parent Issue relationship",
+          "Scheduled autopilot titles and descriptions now use the trigger's configured timezone",
+          "Comment editors avoid duplicate live-update flashes, keep text after failed sends, and apply mention behavior consistently when edited",
+          "Code blocks without a detected language now render their text instead of an empty block",
+          "Desktop and web avatars now resolve relative upload paths correctly",
+          "Codex, Cursor, and Hermes runtime handling received fixes for Desktop discovery, command arguments, usage attribution, and clearer stalled-run diagnostics",
+          "Private intelligent agents can no longer be triggered by plain comments from users who cannot access them",
+          "Several UI details were cleaned up across GitHub settings, project creation, board sorting, and agent skill screens",
+        ],
+      },
       {
         version: "0.3.9",
         date: "2026-05-26",
