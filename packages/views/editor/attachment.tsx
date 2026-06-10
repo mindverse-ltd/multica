@@ -120,7 +120,7 @@ function normalize(
   return {
     filename: input.filename || record?.filename || "",
     contentType: input.contentType || record?.content_type || "",
-    url: input.url,
+    url: record?.download_url || input.url,
     attachmentId: record?.id,
     record,
     uploading: !!input.uploading,
