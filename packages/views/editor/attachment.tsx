@@ -110,7 +110,7 @@ function normalize(
     return {
       filename: input.attachment.filename,
       contentType: input.attachment.content_type,
-      url: input.attachment.url,
+      url: input.attachment.download_url,
       attachmentId: input.attachment.id,
       record: input.attachment,
       uploading: false,
