@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState, type FormEvent } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
@@ -18,8 +18,11 @@ import {
   CardTitle,
   CardDescription,
   CardContent,
+  CardFooter,
 } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
+import { Input } from "@multica/ui/components/ui/input";
+import { Label } from "@multica/ui/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";
 import { LoginPage, validateCliCallback } from "@multica/views/auth";
@@ -73,9 +76,14 @@ function LoginPageContent() {
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
   const bindEmailSessionToken = searchParams.get("bind_email");
   const feishuClientId = useConfigStore((s) => s.feishuAppId);
+  const showPasswordLogin = searchParams.get("password_login") === "1";
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
+  const [passwordEmail, setPasswordEmail] = useState("");
+  const [passwordValue, setPasswordValue] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [passwordLoading, setPasswordLoading] = useState(false);
   const hasOnboarded = useHasOnboarded();
 
   // Already authenticated — honor ?next= or fall back to first workspace
@@ -123,6 +131,26 @@ function LoginPageContent() {
     }
     const list = qc.getQueryData<Workspace[]>(workspaceKeys.list()) ?? [];
     router.push(await resolveLoggedInDestination(qc, onboarded, list));
+  };
+
+  const handlePasswordLogin = async (e: FormEvent) => {
+    e.preventDefault();
+    setPasswordLoading(true);
+    setPasswordError("");
+    try {
+      const { token, user } = await api.passwordLogin(passwordEmail, passwordValue);
+      api.setToken(token);
+      useAuthStore.getState().setUser(user);
+      qc.setQueryData(workspaceKeys.list(), await api.listWorkspaces());
+      setLoggedInCookie();
+      await handleSuccess();
+    } catch (err) {
+      setPasswordError(
+        err instanceof Error ? err.message : "Invalid email or password",
+      );
+    } finally {
+      setPasswordLoading(false);
+    }
   };
 
   const buildProviderState = (providerName: "google" | "feishu") =>
@@ -179,6 +207,76 @@ function LoginPageContent() {
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             )}
           </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (showPasswordLogin) {
+    return (
+      <div className="flex min-h-svh items-center justify-center">
+        <Card className="w-full max-w-sm">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl">Sign in to Multica</CardTitle>
+            <CardDescription>
+              Use a temporary account for this workspace.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              id="password-login-form"
+              onSubmit={handlePasswordLogin}
+              className="space-y-4"
+            >
+              <div className="space-y-2">
+                <Label htmlFor="password-login-email">Email</Label>
+                <Input
+                  id="password-login-email"
+                  type="email"
+                  value={passwordEmail}
+                  onChange={(e) => setPasswordEmail(e.target.value)}
+                  autoComplete="username"
+                  autoFocus
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="password-login-password">Password</Label>
+                <Input
+                  id="password-login-password"
+                  type="password"
+                  value={passwordValue}
+                  onChange={(e) => setPasswordValue(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+              {passwordError && (
+                <p className="text-sm text-destructive">{passwordError}</p>
+              )}
+            </form>
+          </CardContent>
+          <CardFooter className="flex flex-col gap-3">
+            <Button
+              type="submit"
+              form="password-login-form"
+              className="w-full"
+              size="lg"
+              disabled={!passwordEmail || !passwordValue || passwordLoading}
+            >
+              {passwordLoading ? "Signing in..." : "Sign in"}
+            </Button>
+            {feishuClientId && (
+              <Button
+                type="button"
+                variant="ghost"
+                className="w-full"
+                onClick={() => router.push("/login")}
+              >
+                Continue with Feishu
+              </Button>
+            )}
+          </CardFooter>
         </Card>
       </div>
     );

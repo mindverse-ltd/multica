@@ -112,6 +112,11 @@ type VerifyCodeRequest struct {
 	Code  string `json:"code"`
 }
 
+type PasswordLoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
 func generateCode() (string, error) {
 	var buf [4]byte
 	if _, err := rand.Read(buf[:]); err != nil {
@@ -148,6 +153,45 @@ func isSixDigitCode(code string) bool {
 		}
 	}
 	return true
+}
+
+func tempPasswordForEmail(email string) (string, bool) {
+	for _, entry := range strings.FieldsFunc(os.Getenv("MULTICA_TEMP_PASSWORD_USERS"), func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		configEmail, password, ok := strings.Cut(entry, ":")
+		if !ok {
+			continue
+		}
+		configEmail = strings.ToLower(strings.TrimSpace(configEmail))
+		password = strings.TrimSpace(password)
+		if configEmail == "" || password == "" {
+			continue
+		}
+		if strings.EqualFold(configEmail, email) {
+			return password, true
+		}
+	}
+	return "", false
+}
+
+func tempPasswordLoginConfigured() bool {
+	_, ok := tempPasswordForEmail("")
+	if ok {
+		return true
+	}
+	for _, entry := range strings.FieldsFunc(os.Getenv("MULTICA_TEMP_PASSWORD_USERS"), func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	}) {
+		if strings.Contains(strings.TrimSpace(entry), ":") {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) issueJWT(user db.User) (string, error) {
@@ -465,6 +509,73 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("user logged in", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
+	writeJSON(w, http.StatusOK, LoginResponse{
+		Token: tokenString,
+		User:  userToResponse(user),
+	})
+}
+
+func (h *Handler) PasswordLogin(w http.ResponseWriter, r *http.Request) {
+	var req PasswordLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	email := strings.ToLower(strings.TrimSpace(req.Email))
+	password := strings.TrimSpace(req.Password)
+	if email == "" || password == "" {
+		writeError(w, http.StatusBadRequest, "email and password are required")
+		return
+	}
+
+	expected, ok := tempPasswordForEmail(email)
+	if !ok {
+		if tempPasswordLoginConfigured() {
+			writeError(w, http.StatusUnauthorized, "invalid email or password")
+		} else {
+			writeError(w, http.StatusNotFound, "password login is not available")
+		}
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(password), []byte(expected)) != 1 {
+		writeError(w, http.StatusUnauthorized, "invalid email or password")
+		return
+	}
+
+	user, isNew, err := h.findOrCreateUser(r.Context(), email)
+	if err != nil {
+		var signupErr SignupError
+		if errors.As(err, &signupErr) {
+			writeError(w, http.StatusForbidden, signupErr.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+	if isNew {
+		evt := analytics.Signup(uuidToString(user.ID), user.Email, signupSourceFromRequest(r))
+		evt.Properties["auth_method"] = "temporary_password"
+		obsmetrics.RecordEvent(h.Analytics, h.Metrics, evt)
+	}
+
+	tokenString, err := h.issueJWT(user)
+	if err != nil {
+		slog.Warn("password login failed", append(logger.RequestAttrs(r), "error", err, "email", email)...)
+		writeError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	if err := auth.SetAuthCookies(w, tokenString); err != nil {
+		slog.Warn("failed to set auth cookies", "error", err)
+	}
+	if h.CFSigner != nil {
+		for _, cookie := range h.CFSigner.SignedCookies(time.Now().Add(auth.AuthTokenTTL())) {
+			http.SetCookie(w, cookie)
+		}
+	}
+
+	slog.Info("user logged in via temporary password", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
 		User:  userToResponse(user),

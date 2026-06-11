@@ -43,6 +43,34 @@ func TestSignupGating(t *testing.T) {
 	}
 }
 
+func TestTempPasswordForEmail(t *testing.T) {
+	t.Setenv("MULTICA_TEMP_PASSWORD_USERS", "alpha@example.com:one,beta@example.com:two\nGamma@example.com:three")
+
+	got, ok := tempPasswordForEmail("gamma@example.com")
+	if !ok {
+		t.Fatal("expected configured temporary password")
+	}
+	if got != "three" {
+		t.Fatalf("temporary password: got %q want %q", got, "three")
+	}
+
+	if _, ok := tempPasswordForEmail("missing@example.com"); ok {
+		t.Fatal("unexpected password for unconfigured email")
+	}
+}
+
+func TestTempPasswordLoginConfigured(t *testing.T) {
+	t.Setenv("MULTICA_TEMP_PASSWORD_USERS", "")
+	if tempPasswordLoginConfigured() {
+		t.Fatal("expected temporary password login to be disabled")
+	}
+
+	t.Setenv("MULTICA_TEMP_PASSWORD_USERS", "bad-entry,guest@example.com:secret")
+	if !tempPasswordLoginConfigured() {
+		t.Fatal("expected temporary password login to be enabled")
+	}
+}
+
 type mockDB struct {
 	db.DBTX
 	getUserErr error
