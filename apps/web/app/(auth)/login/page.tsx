@@ -18,7 +18,6 @@ import {
   CardTitle,
   CardDescription,
   CardContent,
-  CardFooter,
 } from "@multica/ui/components/ui/card";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -76,7 +75,6 @@ function LoginPageContent() {
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
   const bindEmailSessionToken = searchParams.get("bind_email");
   const feishuClientId = useConfigStore((s) => s.feishuAppId);
-  const showPasswordLogin = searchParams.get("password_login") === "1";
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
   const [desktopError, setDesktopError] = useState("");
@@ -162,6 +160,60 @@ function LoginPageContent() {
       .filter(Boolean)
       .join(",") || undefined;
 
+  const passwordLoginForm = (
+    <div className="w-full space-y-4 pt-1 text-left">
+      <div className="relative">
+        <div className="absolute inset-0 flex items-center">
+          <span className="w-full border-t" />
+        </div>
+        <div className="relative flex justify-center text-xs uppercase">
+          <span className="bg-card px-2 text-muted-foreground">
+            Temporary account
+          </span>
+        </div>
+      </div>
+      <form
+        id="password-login-form"
+        onSubmit={handlePasswordLogin}
+        className="space-y-4"
+      >
+        <div className="space-y-2">
+          <Label htmlFor="password-login-email">Email</Label>
+          <Input
+            id="password-login-email"
+            type="email"
+            value={passwordEmail}
+            onChange={(e) => setPasswordEmail(e.target.value)}
+            autoComplete="username"
+            required
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="password-login-password">Password</Label>
+          <Input
+            id="password-login-password"
+            type="password"
+            value={passwordValue}
+            onChange={(e) => setPasswordValue(e.target.value)}
+            autoComplete="current-password"
+            required
+          />
+        </div>
+        {passwordError && (
+          <p className="text-sm text-destructive">{passwordError}</p>
+        )}
+        <Button
+          type="submit"
+          className="w-full"
+          size="lg"
+          disabled={!passwordEmail || !passwordValue || passwordLoading}
+        >
+          {passwordLoading ? "Signing in..." : "Sign in with password"}
+        </Button>
+      </form>
+    </div>
+  );
+
   // While the desktop handoff is in progress (or has produced a token/error),
   // render a dedicated screen instead of flashing the login form or redirecting
   // away to a workspace page.
@@ -212,76 +264,6 @@ function LoginPageContent() {
     );
   }
 
-  if (showPasswordLogin) {
-    return (
-      <div className="flex min-h-svh items-center justify-center">
-        <Card className="w-full max-w-sm">
-          <CardHeader className="text-center">
-            <CardTitle className="text-2xl">Sign in to Multica</CardTitle>
-            <CardDescription>
-              Use a temporary account for this workspace.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form
-              id="password-login-form"
-              onSubmit={handlePasswordLogin}
-              className="space-y-4"
-            >
-              <div className="space-y-2">
-                <Label htmlFor="password-login-email">Email</Label>
-                <Input
-                  id="password-login-email"
-                  type="email"
-                  value={passwordEmail}
-                  onChange={(e) => setPasswordEmail(e.target.value)}
-                  autoComplete="username"
-                  autoFocus
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="password-login-password">Password</Label>
-                <Input
-                  id="password-login-password"
-                  type="password"
-                  value={passwordValue}
-                  onChange={(e) => setPasswordValue(e.target.value)}
-                  autoComplete="current-password"
-                  required
-                />
-              </div>
-              {passwordError && (
-                <p className="text-sm text-destructive">{passwordError}</p>
-              )}
-            </form>
-          </CardContent>
-          <CardFooter className="flex flex-col gap-3">
-            <Button
-              type="submit"
-              form="password-login-form"
-              className="w-full"
-              size="lg"
-              disabled={!passwordEmail || !passwordValue || passwordLoading}
-            >
-              {passwordLoading ? "Signing in..." : "Sign in"}
-            </Button>
-            {feishuClientId && (
-              <Button
-                type="button"
-                variant="ghost"
-                className="w-full"
-                onClick={() => router.push("/login")}
-              >
-                Continue with Feishu
-              </Button>
-            )}
-          </CardFooter>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <LoginPage
       onSuccess={handleSuccess}
@@ -313,6 +295,7 @@ function LoginPageContent() {
         provider === "feishu" ? provider : undefined
       }
       emailLogin={false}
+      extra={passwordLoginForm}
       verificationCodeHint="当前测试环境默认验证码：888888"
     />
   );
