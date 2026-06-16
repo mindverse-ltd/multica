@@ -1495,6 +1495,7 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // etc.) are intentionally excluded — those are real problems that the user
 // should see, not infrastructure flakiness.
 var retryableReasons = map[string]bool{
+	"agent_empty_completion":    true,
 	"runtime_offline":           true,
 	"runtime_recovery":          true,
 	"timeout":                   true,
