@@ -10,6 +10,7 @@ import type {
   BillingPriceTier,
   BillingTopupsPage,
   BillingTransactionsPage,
+  CancelTaskResponse,
   CreateAgentFromTemplateResponse,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
@@ -25,6 +26,11 @@ import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
 export interface AppConfigResponse {
   cdn_domain: string;
+  // True when the CDN domain serves private content via time-bounded signed
+  // URLs (CloudFront signing) — raw storage URLs on that domain are NOT
+  // publicly fetchable and must not be used as native media sources
+  // (MUL-3254). Older servers omit the field; treat that as false.
+  cdn_signed?: boolean;
   allow_signup: boolean;
   google_client_id?: string;
   feishu_app_id?: string;
@@ -170,6 +176,7 @@ const BooleanWithDefaultSchema = (fallback: boolean) =>
 
 export const AppConfigSchema = z.object({
   cdn_domain: z.string().default(""),
+  cdn_signed: BooleanWithDefaultSchema(false),
   allow_signup: BooleanWithDefaultSchema(true),
   google_client_id: OptionalStringSchema,
   feishu_app_id: OptionalStringSchema,
@@ -183,6 +190,7 @@ export const AppConfigSchema = z.object({
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
   cdn_domain: "",
+  cdn_signed: false,
   allow_signup: true,
   google_client_id: "",
   feishu_app_id: "",
@@ -430,6 +438,67 @@ const RuntimeUsageByHourSchema = z.object({
 export const RuntimeUsageByHourListSchema = z.array(RuntimeUsageByHourSchema);
 
 // ---------------------------------------------------------------------------
+// Task cancellation (`POST /api/tasks/:id/cancel`)
+//
+// This response is consumed directly by chat recovery. The embedded task
+// object stays loose so daemon/runtime fields can drift, but the optional
+// `cancelled_chat_message` payload must be well-formed before the UI deletes
+// a message from cache or restores text into the input.
+// ---------------------------------------------------------------------------
+
+const AgentTaskResponseSchema = z.object({
+  id: z.string(),
+  agent_id: z.string().default(""),
+  runtime_id: z.string().default(""),
+  issue_id: z.string().default(""),
+  status: z.string().default("cancelled"),
+  priority: z.number().default(0),
+  dispatched_at: z.string().nullable().default(null),
+  started_at: z.string().nullable().default(null),
+  completed_at: z.string().nullable().default(null),
+  result: z.unknown().default(null),
+  error: z.string().nullable().default(null),
+  failure_reason: z.string().optional(),
+  created_at: z.string().default(""),
+  chat_session_id: z.string().optional(),
+  autopilot_run_id: z.string().optional(),
+  parent_task_id: z.string().optional(),
+  attempt: z.number().optional(),
+  trigger_comment_id: z.string().optional(),
+  trigger_summary: z.string().optional(),
+  kind: z.string().optional(),
+  work_dir: z.string().optional(),
+  relative_work_dir: z.string().optional(),
+}).loose();
+
+const CancelledChatMessageSchema = z.object({
+  chat_session_id: z.string(),
+  message_id: z.string(),
+  content: z.string(),
+  restore_to_input: z.boolean().default(false),
+}).loose();
+
+export const CancelTaskResponseSchema = AgentTaskResponseSchema.extend({
+  cancelled_chat_message: CancelledChatMessageSchema.nullish()
+    .transform((value) => value ?? undefined),
+}).loose();
+
+export const EMPTY_CANCEL_TASK_RESPONSE: CancelTaskResponse = {
+  id: "",
+  agent_id: "",
+  runtime_id: "",
+  issue_id: "",
+  status: "cancelled",
+  priority: 0,
+  dispatched_at: null,
+  started_at: null,
+  completed_at: null,
+  result: null,
+  error: null,
+  created_at: "",
+};
+
+// ---------------------------------------------------------------------------
 // Agent template catalog — `/api/agent-templates*` and the
 // create-from-template response. The desktop app's create-agent picker
 // reaches these endpoints, and a future server change to the template shape
@@ -672,6 +741,47 @@ export const WebhookDeliveryResponseSchema = WebhookDeliverySchema;
 
 export const EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE: ListWebhookDeliveriesResponse = {
   deliveries: [],
+  total: 0,
+};
+
+// ---------------------------------------------------------------------------
+// Autopilot list schema. Enums (`status`, `execution_mode`, `trigger_kinds`,
+// `last_run_status`) stay `z.string()` so future server-side values degrade
+// to a generic UI fallback. The three derived fields (trigger_kinds /
+// next_run_at / last_run_status) are list-endpoint-only and absent on older
+// servers — optional by contract, the list renders "—" without them.
+// ---------------------------------------------------------------------------
+
+const AutopilotListItemSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string(),
+  description: z.string().nullable().optional(),
+  project_id: z.string().nullable().optional(),
+  // Older servers (pre-MUL-2429) omit assignee_type; "agent" is the
+  // documented default.
+  assignee_type: z.string().default("agent"),
+  assignee_id: z.string(),
+  status: z.string(),
+  execution_mode: z.string(),
+  issue_title_template: z.string().nullable().optional(),
+  created_by_type: z.string(),
+  created_by_id: z.string(),
+  last_run_at: z.string().nullable().optional(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  trigger_kinds: z.array(z.string()).optional(),
+  next_run_at: z.string().nullable().optional(),
+  last_run_status: z.string().nullable().optional(),
+}).loose();
+
+export const ListAutopilotsResponseSchema = z.object({
+  autopilots: z.array(AutopilotListItemSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_AUTOPILOTS_RESPONSE = {
+  autopilots: [],
   total: 0,
 };
 

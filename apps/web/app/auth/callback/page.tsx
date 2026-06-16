@@ -8,6 +8,7 @@ import type { FeishuNeedsEmailResponse, LoginResponse } from "@multica/core/api"
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import { paths, resolvePostAuthDestination } from "@multica/core/paths";
 import { api } from "@multica/core/api";
+import { validateCliCallback, redirectToCliCallback } from "@multica/views/auth";
 import {
   Card,
   CardHeader,
@@ -131,7 +132,42 @@ function CallbackContent() {
       providerPart?.slice(9) === "feishu" ? "feishu" : "google";
     const isDesktop = stateParts.includes("platform:desktop");
 
+    // CLI callback params — carried across the Google OAuth round-trip so
+    // headless/WSL2 `multica login` can receive the JWT after browser-based
+    // Google auth completes.
+    const cliCallbackPart = stateParts.find((p) => p.startsWith("cli_callback:"));
+    const cliStatePart = stateParts.find((p) => p.startsWith("cli_state:"));
+    const cliCallbackRaw = cliCallbackPart
+      ? decodeURIComponent(cliCallbackPart.slice("cli_callback:".length))
+      : null;
+    const cliState = cliStatePart
+      ? decodeURIComponent(cliStatePart.slice("cli_state:".length))
+      : "";
+
     const redirectUri = `${window.location.origin}/auth/callback`;
+
+    // Validate the CLI callback URL before redirecting — the state parameter
+    // passes through OAuth and must be treated as attacker-controlled.
+    const cliCallback =
+      cliCallbackRaw && validateCliCallback(cliCallbackRaw)
+        ? cliCallbackRaw
+        : null;
+
+    if (cliCallback) {
+      if (provider === "feishu") {
+        setError("CLI callback is not supported for Feishu login");
+        return;
+      }
+      api
+        .googleLogin(code, redirectUri)
+        .then(({ token }) => {
+          redirectToCliCallback(cliCallback, token, cliState);
+        })
+        .catch((err) => {
+          setError(err instanceof Error ? err.message : "Login failed");
+        });
+      return;
+    }
 
     if (isDesktop) {
       const exchangeToken =

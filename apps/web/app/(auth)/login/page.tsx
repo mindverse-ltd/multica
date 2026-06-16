@@ -74,6 +74,7 @@ function LoginPageContent() {
   // cannot bounce the user off-origin after a successful login.
   const nextUrl = sanitizeNextUrl(searchParams.get("next"));
   const bindEmailSessionToken = searchParams.get("bind_email");
+  const googleClientId = useConfigStore((s) => s.googleClientId);
   const feishuClientId = useConfigStore((s) => s.feishuAppId);
 
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
@@ -151,11 +152,20 @@ function LoginPageContent() {
     }
   };
 
+  // OAuth state carries provider, platform, destination, and CLI callback
+  // params across the provider redirect so the callback can finish the
+  // correct web, desktop, or CLI login flow.
   const buildProviderState = (providerName: "google" | "feishu") =>
     [
       `provider:${providerName}`,
       platform === "desktop" ? "platform:desktop" : "",
       nextUrl ? `next:${nextUrl}` : "",
+      providerName === "google" && cliCallbackRaw && validateCliCallback(cliCallbackRaw)
+        ? `cli_callback:${encodeURIComponent(cliCallbackRaw)}`
+        : "",
+      providerName === "google" && cliState
+        ? `cli_state:${encodeURIComponent(cliState)}`
+        : "",
     ]
       .filter(Boolean)
       .join(",") || undefined;
@@ -267,6 +277,15 @@ function LoginPageContent() {
   return (
     <LoginPage
       onSuccess={handleSuccess}
+      google={
+        googleClientId
+          ? {
+              clientId: googleClientId,
+              redirectUri: `${window.location.origin}/auth/callback`,
+              state: buildProviderState("google"),
+            }
+          : undefined
+      }
       feishu={
         feishuClientId
           ? {
