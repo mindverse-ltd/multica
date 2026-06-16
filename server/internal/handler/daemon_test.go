@@ -2301,6 +2301,161 @@ func TestCompleteTask_CommentTriggered_SkipsSynthesisWhenAgentAlreadyCommented(t
 	}
 }
 
+func TestCompleteTask_EmptyOutputWithoutAgentCommentRetries(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+	`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("setup: get agent: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
+		VALUES ($1, 'empty completion retry fixture', 'in_progress', 'none', $2, 'member', 81201, 0)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("setup: create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id, status, priority, started_at,
+			attempt, max_attempts, session_id, work_dir
+		)
+		VALUES ($1, $2, $3, 'running', 0, now(), 1, 2, 'session-empty', '/tmp/empty')
+		RETURNING id
+	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("setup: create running task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1 OR parent_task_id = $1`, taskID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete",
+		map[string]any{"output": "", "session_id": "session-empty", "work_dir": "/tmp/empty"},
+		testWorkspaceID, "legit-daemon")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("taskId", taskID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status, failureReason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '') FROM agent_task_queue WHERE id = $1
+	`, taskID).Scan(&status, &failureReason); err != nil {
+		t.Fatalf("read parent task: %v", err)
+	}
+	if status != "failed" {
+		t.Fatalf("parent status = %q, want failed", status)
+	}
+	if failureReason != "agent_empty_completion" {
+		t.Fatalf("failure_reason = %q, want agent_empty_completion", failureReason)
+	}
+
+	var childStatus, childSessionID, childWorkDir string
+	var childAttempt int
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, attempt, COALESCE(session_id, ''), COALESCE(work_dir, '')
+		FROM agent_task_queue
+		WHERE parent_task_id = $1
+	`, taskID).Scan(&childStatus, &childAttempt, &childSessionID, &childWorkDir); err != nil {
+		t.Fatalf("read retry child: %v", err)
+	}
+	if childStatus != "queued" || childAttempt != 2 {
+		t.Fatalf("retry child = status %q attempt %d, want queued attempt 2", childStatus, childAttempt)
+	}
+	if childSessionID != "session-empty" || childWorkDir != "/tmp/empty" {
+		t.Fatalf("retry child resume = (%q, %q), want session/workdir preserved", childSessionID, childWorkDir)
+	}
+}
+
+func TestCompleteTask_EmptyOutputWithAgentCommentCompletes(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+		SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+	`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("setup: get agent: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
+		VALUES ($1, 'empty completion comment fixture', 'in_progress', 'none', $2, 'member', 81202, 0)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
+		t.Fatalf("setup: create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, started_at)
+		VALUES ($1, $2, $3, 'running', 0, now() - interval '1 second')
+		RETURNING id
+	`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+		t.Fatalf("setup: create running task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1 OR parent_task_id = $1`, taskID)
+	})
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type)
+		VALUES ($1, $2, 'agent', $3, 'delivered via comment', 'comment')
+	`, issueID, testWorkspaceID, agentID); err != nil {
+		t.Fatalf("setup: create agent comment: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete",
+		map[string]any{"output": ""},
+		testWorkspaceID, "legit-daemon")
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("taskId", taskID)
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatalf("read task status: %v", err)
+	}
+	if status != "completed" {
+		t.Fatalf("status = %q, want completed", status)
+	}
+
+	var retryCount int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, taskID).Scan(&retryCount); err != nil {
+		t.Fatalf("count retry child: %v", err)
+	}
+	if retryCount != 0 {
+		t.Fatalf("retry child count = %d, want 0", retryCount)
+	}
+}
+
 func TestCompleteTask_CommentTriggered_SuppressesTrivialDoneOutput(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

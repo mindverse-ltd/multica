@@ -1863,7 +1863,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	currentTask, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
 		return
 	}
@@ -1871,6 +1871,21 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	var req TaskCompleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if h.shouldRetryEmptyCompletion(r.Context(), currentTask, req.Output) {
+		failed, err := h.TaskService.FailTask(r.Context(), parseUUID(taskID), "agent ended with empty output before delivering a result; retrying", req.SessionID, req.WorkDir, "agent_empty_completion")
+		if err != nil {
+			slog.Warn("empty completion retry failed", "task_id", taskID, "error", err)
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), failed.ID); err != nil {
+			slog.Warn("empty completion retry: failed to revoke task token", "task_id", uuidToString(failed.ID), "error", err)
+		}
+		slog.Warn("empty completion reclassified for retry", "task_id", taskID, "agent_id", uuidToString(currentTask.AgentID))
+		writeJSON(w, http.StatusOK, taskToResponse(*failed, workspaceID))
 		return
 	}
 
@@ -1896,6 +1911,26 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
+}
+
+func (h *Handler) shouldRetryEmptyCompletion(ctx context.Context, task db.AgentTaskQueue, output string) bool {
+	if strings.TrimSpace(output) != "" {
+		return false
+	}
+	if !task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid || !task.StartedAt.Valid {
+		return false
+	}
+
+	commented, err := h.Queries.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
+		IssueID:  task.IssueID,
+		AuthorID: task.AgentID,
+		Since:    task.StartedAt,
+	})
+	if err != nil {
+		slog.Warn("empty completion: comment delivery check failed", "task_id", uuidToString(task.ID), "error", err)
+		return false
+	}
+	return !commented
 }
 
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at
