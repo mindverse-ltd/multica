@@ -2107,14 +2107,11 @@ func TestClaimTaskByRuntime_TaskWorkspaceMismatch_CancelsAndRejects(t *testing.T
 	}
 }
 
-// Regression test for MUL-1198: comment-triggered tasks that finish without
-// the agent posting any comment must still deliver a synthesized result
-// comment, threaded under the trigger. Before the fix, CompleteTask exempted
-// comment-triggered tasks from the auto-synthesis path, so a Claude Code /
-// Codex / etc. agent that ended its run with only terminal text (no
-// `multica issue comment add` call) left the user staring at a "Completed"
-// badge with no reply.
-func TestCompleteTask_CommentTriggered_SynthesizesCommentWhenAgentSilent(t *testing.T) {
+// Comment-triggered issue tasks must explicitly deliver via an agent-authored
+// issue comment. Daemon stdout can contain mid-investigation fragments, so a
+// terminal completion with only output text is retried instead of being marked
+// completed or synthesized into a misleading comment.
+func TestCompleteTask_CommentTriggeredWithoutAgentCommentRetries(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -2181,47 +2178,30 @@ func TestCompleteTask_CommentTriggered_SynthesizesCommentWhenAgentSilent(t *test
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Exactly one agent comment on the issue, threaded under the trigger,
-	// carrying the agent's final output.
-	rows, err := testPool.Query(ctx, `
-		SELECT content, parent_id FROM comment
-		WHERE issue_id = $1 AND author_type = 'agent' AND author_id = $2
-		ORDER BY created_at ASC
-	`, issueID, agentID)
-	if err != nil {
-		t.Fatalf("query synthesized comments: %v", err)
+	var status, failureReason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '') FROM agent_task_queue WHERE id = $1
+	`, taskID).Scan(&status, &failureReason); err != nil {
+		t.Fatalf("read parent task: %v", err)
 	}
-	defer rows.Close()
+	if status != "failed" || failureReason != "agent_no_delivery" {
+		t.Fatalf("parent task = status %q reason %q, want failed agent_no_delivery", status, failureReason)
+	}
 
-	var (
-		content  string
-		parentID *string
-		seen     int
-	)
-	for rows.Next() {
-		if err := rows.Scan(&content, &parentID); err != nil {
-			t.Fatalf("scan comment: %v", err)
-		}
-		seen++
+	var commentCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM comment
+		WHERE issue_id = $1 AND author_type = 'agent' AND author_id = $2
+	`, issueID, agentID).Scan(&commentCount); err != nil {
+		t.Fatalf("count agent comments: %v", err)
 	}
-	if seen != 1 {
-		t.Fatalf("expected exactly 1 synthesized agent comment, got %d", seen)
-	}
-	if content != agentFinalOutput {
-		t.Fatalf("synthesized comment content = %q, want %q", content, agentFinalOutput)
-	}
-	if parentID == nil || *parentID != triggerCommentID {
-		got := "<nil>"
-		if parentID != nil {
-			got = *parentID
-		}
-		t.Fatalf("synthesized comment parent_id = %s, want trigger comment %s", got, triggerCommentID)
+	if commentCount != 0 {
+		t.Fatalf("expected no synthesized agent comment, got %d", commentCount)
 	}
 }
 
 // Companion to the above: when the agent DID post its own comment during the
-// run, CompleteTask must not synthesize a duplicate. Guards against the
-// common case where the fix is over-eager and creates two comments per task.
+// run, CompleteTask should accept completion and must not synthesize a duplicate.
 func TestCompleteTask_CommentTriggered_SkipsSynthesisWhenAgentAlreadyCommented(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -2301,7 +2281,7 @@ func TestCompleteTask_CommentTriggered_SkipsSynthesisWhenAgentAlreadyCommented(t
 	}
 }
 
-func TestCompleteTask_EmptyOutputWithoutAgentCommentRetries(t *testing.T) {
+func TestCompleteTask_OutputWithoutAgentCommentRetries(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -2318,7 +2298,7 @@ func TestCompleteTask_EmptyOutputWithoutAgentCommentRetries(t *testing.T) {
 	var issueID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
-		VALUES ($1, 'empty completion retry fixture', 'in_progress', 'none', $2, 'member', 81201, 0)
+		VALUES ($1, 'missing delivery retry fixture', 'in_progress', 'none', $2, 'member', 81201, 0)
 		RETURNING id
 	`, testWorkspaceID, testUserID).Scan(&issueID); err != nil {
 		t.Fatalf("setup: create issue: %v", err)
@@ -2342,7 +2322,7 @@ func TestCompleteTask_EmptyOutputWithoutAgentCommentRetries(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := newDaemonTokenRequest("POST", "/api/daemon/tasks/"+taskID+"/complete",
-		map[string]any{"output": "", "session_id": "session-empty", "work_dir": "/tmp/empty"},
+		map[string]any{"output": "Now I have enough context to synthesize findings:", "session_id": "session-empty", "work_dir": "/tmp/empty"},
 		testWorkspaceID, "legit-daemon")
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add("taskId", taskID)
@@ -2362,8 +2342,8 @@ func TestCompleteTask_EmptyOutputWithoutAgentCommentRetries(t *testing.T) {
 	if status != "failed" {
 		t.Fatalf("parent status = %q, want failed", status)
 	}
-	if failureReason != "agent_empty_completion" {
-		t.Fatalf("failure_reason = %q, want agent_empty_completion", failureReason)
+	if failureReason != "agent_no_delivery" {
+		t.Fatalf("failure_reason = %q, want agent_no_delivery", failureReason)
 	}
 
 	var childStatus, childSessionID, childWorkDir string
@@ -2525,9 +2505,19 @@ func TestCompleteTask_CommentTriggered_SuppressesTrivialDoneOutput(t *testing.T)
 	if count != 0 {
 		t.Fatalf("expected no synthesized agent comment for trivial Done output, got %d", count)
 	}
+
+	var status, failureReason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '') FROM agent_task_queue WHERE id = $1
+	`, taskID).Scan(&status, &failureReason); err != nil {
+		t.Fatalf("read parent task: %v", err)
+	}
+	if status != "failed" || failureReason != "agent_no_delivery" {
+		t.Fatalf("parent task = status %q reason %q, want failed agent_no_delivery", status, failureReason)
+	}
 }
 
-func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *testing.T) {
+func TestCompleteTask_AssignmentTriggeredWithoutAgentCommentRetries(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -2577,16 +2567,25 @@ func TestCompleteTask_AssignmentTriggered_DoesNotSuppressTrivialDoneOutput(t *te
 		t.Fatalf("CompleteTask: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var content string
+	var commentCount int
 	if err := testPool.QueryRow(ctx, `
-		SELECT content FROM comment
+		SELECT count(*) FROM comment
 		WHERE issue_id = $1 AND author_type = 'agent' AND author_id = $2
-		ORDER BY created_at DESC LIMIT 1
-	`, issueID, agentID).Scan(&content); err != nil {
-		t.Fatalf("query synthesized comment: %v", err)
+	`, issueID, agentID).Scan(&commentCount); err != nil {
+		t.Fatalf("count agent comments: %v", err)
 	}
-	if content != "Done." {
-		t.Fatalf("synthesized comment content = %q, want Done.", content)
+	if commentCount != 0 {
+		t.Fatalf("expected no synthesized agent comment, got %d", commentCount)
+	}
+
+	var status, failureReason string
+	if err := testPool.QueryRow(ctx, `
+		SELECT status, COALESCE(failure_reason, '') FROM agent_task_queue WHERE id = $1
+	`, taskID).Scan(&status, &failureReason); err != nil {
+		t.Fatalf("read parent task: %v", err)
+	}
+	if status != "failed" || failureReason != "agent_no_delivery" {
+		t.Fatalf("parent task = status %q reason %q, want failed agent_no_delivery", status, failureReason)
 	}
 }
 

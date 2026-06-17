@@ -146,7 +146,7 @@ func TestCompleteTask_SquadLeaderNoActionCanonicalizesTaskID(t *testing.T) {
 	}
 }
 
-func TestCompleteTask_SquadLeaderActionStillSynthesizesComment(t *testing.T) {
+func TestCompleteTask_SquadLeaderActionWithoutCommentRetries(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -156,8 +156,18 @@ func TestCompleteTask_SquadLeaderActionStillSynthesizesComment(t *testing.T) {
 
 	completeRunningTask(t, fx, "Delegated the review.")
 
-	if got := countAgentCommentsForIssue(t, fx.IssueID, fx.LeaderID); got != 1 {
-		t.Fatalf("expected action completion to synthesize one comment, got %d", got)
+	if got := countAgentCommentsForIssue(t, fx.IssueID, fx.LeaderID); got != 0 {
+		t.Fatalf("expected no synthesized comment for action completion, got %d", got)
+	}
+
+	var status, failureReason string
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT status, COALESCE(failure_reason, '') FROM agent_task_queue WHERE id = $1
+	`, fx.TaskID).Scan(&status, &failureReason); err != nil {
+		t.Fatalf("read parent task: %v", err)
+	}
+	if status != "failed" || failureReason != "agent_no_delivery" {
+		t.Fatalf("parent task = status %q reason %q, want failed agent_no_delivery", status, failureReason)
 	}
 }
 

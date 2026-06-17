@@ -1874,17 +1874,17 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.shouldRetryEmptyCompletion(r.Context(), currentTask, req.Output) {
-		failed, err := h.TaskService.FailTask(r.Context(), parseUUID(taskID), "agent ended with empty output before delivering a result; retrying", req.SessionID, req.WorkDir, "agent_empty_completion")
+	if h.shouldRetryUndeliveredIssueCompletion(r.Context(), currentTask) {
+		failed, err := h.TaskService.FailTask(r.Context(), parseUUID(taskID), "agent completed without posting a result comment; retrying", req.SessionID, req.WorkDir, "agent_no_delivery")
 		if err != nil {
-			slog.Warn("empty completion retry failed", "task_id", taskID, "error", err)
+			slog.Warn("undelivered completion retry failed", "task_id", taskID, "error", err)
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), failed.ID); err != nil {
-			slog.Warn("empty completion retry: failed to revoke task token", "task_id", uuidToString(failed.ID), "error", err)
+			slog.Warn("undelivered completion retry: failed to revoke task token", "task_id", uuidToString(failed.ID), "error", err)
 		}
-		slog.Warn("empty completion reclassified for retry", "task_id", taskID, "agent_id", uuidToString(currentTask.AgentID))
+		slog.Warn("undelivered completion reclassified for retry", "task_id", taskID, "agent_id", uuidToString(currentTask.AgentID))
 		writeJSON(w, http.StatusOK, taskToResponse(*failed, workspaceID))
 		return
 	}
@@ -1913,11 +1913,17 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
 }
 
-func (h *Handler) shouldRetryEmptyCompletion(ctx context.Context, task db.AgentTaskQueue, output string) bool {
-	if strings.TrimSpace(output) != "" {
+func (h *Handler) shouldRetryUndeliveredIssueCompletion(ctx context.Context, task db.AgentTaskQueue) bool {
+	if !task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid || !task.StartedAt.Valid {
 		return false
 	}
-	if !task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid || !task.StartedAt.Valid {
+
+	noAction, err := service.HasSquadLeaderNoActionEvaluationForTask(ctx, h.Queries, task)
+	if err != nil {
+		slog.Warn("undelivered completion: no-action delivery check failed", "task_id", uuidToString(task.ID), "error", err)
+		return false
+	}
+	if noAction {
 		return false
 	}
 
@@ -1927,7 +1933,7 @@ func (h *Handler) shouldRetryEmptyCompletion(ctx context.Context, task db.AgentT
 		Since:    task.StartedAt,
 	})
 	if err != nil {
-		slog.Warn("empty completion: comment delivery check failed", "task_id", uuidToString(task.ID), "error", err)
+		slog.Warn("undelivered completion: comment delivery check failed", "task_id", uuidToString(task.ID), "error", err)
 		return false
 	}
 	return !commented

@@ -1496,6 +1496,7 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // should see, not infrastructure flakiness.
 var retryableReasons = map[string]bool{
 	"agent_empty_completion":    true,
+	"agent_no_delivery":         true,
 	"runtime_offline":           true,
 	"runtime_recovery":          true,
 	"timeout":                   true,
