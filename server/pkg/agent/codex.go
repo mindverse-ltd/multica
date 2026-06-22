@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -56,6 +57,8 @@ const CodexSemanticInactivityMarker = "codex semantic inactivity timeout"
 const CodexFirstTurnNoProgressMarker = "codex app-server no progress timeout"
 
 const codexModelCatalogRefreshTimeoutSignal = "failed to refresh available models: timeout waiting for child process to exit"
+
+var errCodexProcessExited = errors.New("codex process exited")
 
 type codexTimeoutKind int
 
@@ -589,6 +592,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		cfg:                  b.cfg,
 		stdin:                stdin,
 		pending:              make(map[int]*pendingRPC),
+		processDone:          make(chan struct{}),
 		notificationProtocol: "unknown",
 		onMessage: func(msg Message) {
 			logCodexAgentMessage(b.cfg.Logger, msg)
@@ -625,7 +629,11 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			}
 			c.handleLine(line)
 		}
-		c.closeAllPending(fmt.Errorf("codex process exited"))
+		if err := scanner.Err(); err != nil {
+			c.markProcessExited(fmt.Errorf("%w: %v", errCodexProcessExited, err))
+			return
+		}
+		c.markProcessExited(errCodexProcessExited)
 	}()
 
 	// drainAndWait closes stdin so codex shuts down, then joins cmd.Wait().
@@ -764,20 +772,38 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 
 		waitingForTurn := true
 		var timeoutDiagnostic codexTimeoutDiagnostic
+		var processExitErr error
+		finishTurn := func(aborted bool) {
+			waitingForTurn = false
+			switch {
+			case aborted:
+				finalStatus = "aborted"
+				if errMsg := c.getTurnError(); errMsg != "" {
+					finalError = errMsg
+				} else {
+					finalError = "turn was aborted"
+				}
+			default:
+				if errMsg := c.getTurnError(); errMsg != "" {
+					finalStatus = "failed"
+					finalError = errMsg
+				}
+			}
+		}
+		finishRunContextDone := func() {
+			waitingForTurn = false
+			if runCtx.Err() == context.DeadlineExceeded {
+				finalStatus = "timeout"
+				finalError = fmt.Sprintf("codex timed out after %s", timeout)
+			} else {
+				finalStatus = "aborted"
+				finalError = "execution cancelled"
+			}
+		}
 		for waitingForTurn {
 			select {
 			case aborted := <-turnDone:
-				waitingForTurn = false
-				switch {
-				case aborted:
-					finalStatus = "aborted"
-					finalError = "turn was aborted"
-				default:
-					if errMsg := c.getTurnError(); errMsg != "" {
-						finalStatus = "failed"
-						finalError = errMsg
-					}
-				}
+				finishTurn(aborted)
 			case activity := <-semanticActivityCh:
 				description := activity.description
 				lastSemanticActivity = time.Now()
@@ -853,13 +879,23 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 					"idle_for", time.Since(lastSemanticActivity).Round(time.Millisecond).String(),
 				)
 			case <-runCtx.Done():
-				waitingForTurn = false
-				if runCtx.Err() == context.DeadlineExceeded {
-					finalStatus = "timeout"
-					finalError = fmt.Sprintf("codex timed out after %s", timeout)
-				} else {
-					finalStatus = "aborted"
-					finalError = "execution cancelled"
+				finishRunContextDone()
+			case <-c.processDone:
+				select {
+				case aborted := <-turnDone:
+					finishTurn(aborted)
+				default:
+					if runCtx.Err() != nil {
+						finishRunContextDone()
+					} else {
+						waitingForTurn = false
+						finalStatus = "failed"
+						processExitErr = c.getProcessErr()
+						if processExitErr == nil {
+							processExitErr = errCodexProcessExited
+						}
+						finalError = processExitErr.Error()
+					}
 				}
 			}
 		}
@@ -887,6 +923,9 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		}
 		drainAndWait()
 
+		if processExitErr != nil {
+			finalError = withAgentStderr(processExitErr.Error(), "codex", stderrBuf.Tail())
+		}
 		if timeoutDiagnostic.Kind != codexTimeoutNone {
 			timeoutDiagnostic.CodexVersion = detectCodexVersionForDiagnostics(context.Background(), execPath, cmd.Env, b.cfg.Logger)
 			finalError = buildCodexTimeoutDiagnosticError(timeoutDiagnostic, stderrBuf.Tail())
@@ -937,11 +976,12 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 
 // startOrResumeThread picks between Codex's thread/resume and thread/start
 // based on opts.ResumeSessionID. When a prior thread ID is provided it first
-// tries thread/resume; any error (unknown thread, schema mismatch, transport
-// failure) is logged and the method falls back to thread/start so the task
-// still executes. The returned threadID is what subsequent turn/start calls
-// must reference, and resumed indicates whether the prior thread was picked
-// up (only useful for logging).
+// tries thread/resume; recoverable protocol errors (unknown thread, schema
+// mismatch) fall back to thread/start so the task still executes, while
+// transport/process failures fail fast because the app-server can no longer
+// answer a fresh start request. The returned threadID is what subsequent
+// turn/start calls must reference, and resumed indicates whether the prior
+// thread was picked up (only useful for logging).
 func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions, logger *slog.Logger) (string, bool, error) {
 	if priorThreadID := opts.ResumeSessionID; priorThreadID != "" {
 		// thread/resume reuses the thread's persisted model and reasoning
@@ -965,6 +1005,10 @@ func (c *codexClient) startOrResumeThread(ctx context.Context, opts ExecOptions,
 			}
 			logger.Warn("codex thread/resume returned no thread ID; falling back to thread/start", "prior_thread_id", priorThreadID)
 		} else {
+			if isCodexTransportError(err) {
+				logger.Warn("codex thread/resume failed due to transport error; not falling back to thread/start", "prior_thread_id", priorThreadID, "error", err)
+				return "", false, fmt.Errorf("codex thread/resume failed: %w", err)
+			}
 			logger.Warn("codex thread/resume failed; falling back to thread/start", "prior_thread_id", priorThreadID, "error", err)
 		}
 	}
@@ -1226,6 +1270,8 @@ type codexClient struct {
 	mu                 sync.Mutex
 	nextID             int
 	pending            map[int]*pendingRPC
+	processDone        chan struct{}
+	processErr         error
 	threadID           string
 	turnID             string
 	onMessage          func(Message)
@@ -1271,7 +1317,19 @@ type rpcResult struct {
 }
 
 func (c *codexClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
+	if c.processErr != nil {
+		err := c.processErr
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.processDone == nil {
+		c.processDone = make(chan struct{})
+	}
+	processDone := c.processDone
 	c.nextID++
 	id := c.nextID
 	pr := &pendingRPC{ch: make(chan rpcResult, 1), method: method}
@@ -1309,6 +1367,18 @@ func (c *codexClient) request(ctx context.Context, method string, params any) (j
 	select {
 	case res := <-pr.ch:
 		return res.result, res.err
+	case <-processDone:
+		c.mu.Lock()
+		delete(c.pending, id)
+		err := c.processErr
+		c.mu.Unlock()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		if err == nil {
+			err = errCodexProcessExited
+		}
+		return nil, err
 	case <-ctx.Done():
 		c.mu.Lock()
 		delete(c.pending, id)
@@ -1359,6 +1429,40 @@ func (c *codexClient) closeAllPending(err error) {
 		pr.ch <- rpcResult{err: err}
 		delete(c.pending, id)
 	}
+}
+
+func (c *codexClient) markProcessExited(err error) {
+	if err == nil {
+		err = errCodexProcessExited
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.processErr == nil {
+		c.processErr = err
+		if c.processDone != nil {
+			close(c.processDone)
+		}
+	}
+	for id, pr := range c.pending {
+		pr.ch <- rpcResult{err: err}
+		delete(c.pending, id)
+	}
+}
+
+func (c *codexClient) getProcessErr() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.processErr
+}
+
+func isCodexTransportError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errCodexProcessExited) {
+		return true
+	}
+	return strings.HasPrefix(err.Error(), "write ")
 }
 
 func (c *codexClient) handleLine(line string) {
@@ -1432,11 +1536,37 @@ func (c *codexClient) handleServerRequest(raw map[string]json.RawMessage) {
 		c.respond(id, map[string]any{"decision": "accept"})
 	case "item/fileChange/requestApproval", "applyPatchApproval":
 		c.respond(id, map[string]any{"decision": "accept"})
+	case "item/permissions/requestApproval":
+		c.respond(id, codexPermissionsApprovalResponse(raw["params"]))
 	case "mcpServer/elicitation/request":
 		c.respond(id, map[string]any{"action": "accept", "content": nil, "_meta": nil})
 	default:
+		msg := fmt.Sprintf("unsupported codex app-server request: %s", method)
 		c.cfg.Logger.Warn("codex: unhandled server request", "method", method, "id", id)
-		c.respondError(id, -32601, fmt.Sprintf("unhandled server request: %s", method))
+		c.setTurnError(msg)
+		c.respondError(id, -32601, msg)
+	}
+}
+
+func codexPermissionsApprovalResponse(params json.RawMessage) map[string]any {
+	var payload struct {
+		Permissions map[string]any `json:"permissions"`
+	}
+	_ = json.Unmarshal(params, &payload)
+
+	granted := map[string]any{}
+	if payload.Permissions != nil {
+		if network, ok := payload.Permissions["network"]; ok && network != nil {
+			granted["network"] = network
+		}
+		if fileSystem, ok := payload.Permissions["fileSystem"]; ok && fileSystem != nil {
+			granted["fileSystem"] = fileSystem
+		}
+	}
+
+	return map[string]any{
+		"permissions": granted,
+		"scope":       "turn",
 	}
 }
 
