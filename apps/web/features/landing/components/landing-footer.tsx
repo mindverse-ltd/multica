@@ -4,7 +4,15 @@ import Link from "next/link";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
 import { cn } from "@multica/ui/lib/utils";
 import { useAuthStore } from "@multica/core/auth";
-import { XMark, GitHubMark, githubUrl, twitterUrl } from "./shared";
+import { captureDownloadIntent } from "@multica/core/analytics";
+import {
+  XMark,
+  GitHubMark,
+  DiscordMark,
+  githubUrl,
+  twitterUrl,
+  discordUrl,
+} from "./shared";
 import { useLocale, locales, localeLabels } from "../i18n";
 
 export function LandingFooter() {
@@ -45,6 +53,15 @@ export function LandingFooter() {
               >
                 <GitHubMark className="size-4" />
               </Link>
+              <Link
+                href={discordUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Discord"
+                className="text-white/40 transition-colors hover:text-white"
+              >
+                <DiscordMark className="size-4" />
+              </Link>
             </div>
             <div className="mt-6">
               <Link
@@ -71,6 +88,11 @@ export function LandingFooter() {
                         {...(link.href.startsWith("http")
                           ? { target: "_blank", rel: "noreferrer" }
                           : {})}
+                        onClick={
+                          link.href === "/download"
+                            ? () => captureDownloadIntent("landing_footer")
+                            : undefined
+                        }
                         className="text-[14px] text-white/50 transition-colors hover:text-white"
                       >
                         {link.label}

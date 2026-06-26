@@ -1,11 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
-import {
-  onInboxInvalidate,
-  onInboxIssueDeleted,
-  onInboxIssueStatusChanged,
-  onInboxNew,
-} from "./ws-updaters";
+import { onInboxIssueDeleted, onInboxIssueStatusChanged, onInboxSummaryInvalidate } from "./ws-updaters";
 import { inboxKeys } from "./queries";
 import type { InboxItem } from "../types";
 
@@ -61,6 +56,28 @@ describe("onInboxIssueDeleted", () => {
   });
 });
 
+describe("onInboxSummaryInvalidate", () => {
+  it("invalidates the account-level summary key regardless of active workspace", () => {
+    const qc = new QueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+
+    onInboxSummaryInvalidate(qc);
+
+    expect(spy).toHaveBeenCalledWith({ queryKey: inboxKeys.unreadSummary() });
+  });
+
+  it("does not disturb a workspace-scoped inbox list cache", () => {
+    const qc = new QueryClient();
+    qc.setQueryData<InboxItem[]>(inboxKeys.list(wsId), [makeItem("i1", "issue-a")]);
+
+    onInboxSummaryInvalidate(qc);
+
+    // The list cache entry is untouched (different key); only the summary
+    // query is marked stale.
+    expect(qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId))?.[0]?.id).toBe("i1");
+  });
+});
+
 describe("onInboxIssueStatusChanged", () => {
   it("updates issue_status only for items referencing the issue", () => {
     const qc = new QueryClient();
@@ -75,31 +92,5 @@ describe("onInboxIssueStatusChanged", () => {
     const after = qc.getQueryData<InboxItem[]>(inboxKeys.list(wsId));
     expect(after?.find((i) => i.id === "i1")?.issue_status).toBe("done");
     expect(after?.find((i) => i.id === "i2")?.issue_status).toBe("todo");
-  });
-});
-
-describe("inbox query invalidation", () => {
-  it("invalidates both list and unread-count queries for incoming inbox events", () => {
-    const qc = new QueryClient();
-    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
-
-    onInboxNew(qc, wsId, makeItem("i1", "issue-a"));
-
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: inboxKeys.list(wsId) });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: inboxKeys.unreadCount(wsId),
-    });
-  });
-
-  it("invalidates both list and unread-count queries for broad inbox invalidation", () => {
-    const qc = new QueryClient();
-    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
-
-    onInboxInvalidate(qc, wsId);
-
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: inboxKeys.list(wsId) });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: inboxKeys.unreadCount(wsId),
-    });
   });
 });
