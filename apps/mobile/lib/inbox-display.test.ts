@@ -51,4 +51,20 @@ describe("deduplicateInboxItems", () => {
       },
     });
   });
+
+  it("pins unread representatives above read ones, newest-first within each group", () => {
+    const merged = deduplicateInboxItems([
+      item({ id: "unread-old", issue_id: "issue-unread", read: false, created_at: "2026-06-15T07:00:00Z" }),
+      item({ id: "read-new", issue_id: "issue-read", read: true, created_at: "2026-06-15T09:00:00Z" }),
+      item({ id: "unread-new", issue_id: "issue-unread-2", read: false, created_at: "2026-06-15T08:30:00Z" }),
+      item({ id: "read-old", issue_id: "issue-read-2", read: true, created_at: "2026-06-15T06:00:00Z" }),
+    ]);
+
+    expect(merged.map((i) => i.id)).toEqual([
+      "unread-new",
+      "unread-old",
+      "read-new",
+      "read-old",
+    ]);
+  });
 });

@@ -71,6 +71,37 @@ describe("deduplicateInboxItems", () => {
     expect(merged[0]?.id).toBe("newer-comment");
     expect(merged[0]?.details?.comment_id).toBe("comment-2");
   });
+
+  it("pins unread representatives above read ones, newest-first within each group", () => {
+    const merged = deduplicateInboxItems([
+      // oldest item, but unread -> should land first among unread
+      item({ id: "unread-old", issue_id: "issue-unread", read: false, created_at: "2026-06-15T07:00:00Z" }),
+      // newest item, read -> should sink below all unread
+      item({ id: "read-new", issue_id: "issue-read", read: true, created_at: "2026-06-15T09:00:00Z" }),
+      // newer unread -> should be the very first entry
+      item({ id: "unread-new", issue_id: "issue-unread-2", read: false, created_at: "2026-06-15T08:30:00Z" }),
+      // older read -> should be last
+      item({ id: "read-old", issue_id: "issue-read-2", read: true, created_at: "2026-06-15T06:00:00Z" }),
+    ]);
+
+    expect(merged.map((i) => i.id)).toEqual([
+      "unread-new",
+      "unread-old",
+      "read-new",
+      "read-old",
+    ]);
+  });
+
+  it("keeps unread-first ordering across distinct issue groups", () => {
+    const merged = deduplicateInboxItems([
+      // A read item whose newest representative is read, older than an unread one
+      item({ id: "read-rep", issue_id: "issue-read", read: true, created_at: "2026-06-15T09:00:00Z" }),
+      // An unread item that is older than the read one — unread must still win
+      item({ id: "unread-rep", issue_id: "issue-unread", read: false, created_at: "2026-06-15T05:00:00Z" }),
+    ]);
+
+    expect(merged.map((i) => i.id)).toEqual(["unread-rep", "read-rep"]);
+  });
 });
 
 describe("hasOtherWorkspaceUnread", () => {
