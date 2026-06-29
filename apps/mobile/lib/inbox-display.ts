@@ -64,7 +64,8 @@ export function getInboxDisplayTitle(item: InboxItem): string {
  *   3. In each group, keep the newest by `created_at`.
  *   4. Preserve the newest grouped `comment_id` anchor when the newest row
  *      is a later status/metadata event for the same issue.
- *   5. Sort the result newest-first.
+ *   5. Sort the result unread-first: unread representatives rise to the
+ *      top, read ones sink to the bottom, newest-first within each group.
  */
 export function deduplicateInboxItems(items: InboxItem[]): InboxItem[] {
   const active = items.filter((i) => !i.archived);
@@ -98,8 +99,10 @@ export function deduplicateInboxItems(items: InboxItem[]): InboxItem[] {
 
     merged.push(newest);
   }
-  return merged.sort(
-    (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  );
+  return merged.sort((a, b) => {
+    const aUnread = !a.read;
+    const bUnread = !b.read;
+    if (aUnread !== bUnread) return aUnread ? -1 : 1;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
 }

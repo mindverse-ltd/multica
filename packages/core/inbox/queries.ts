@@ -72,6 +72,10 @@ export function useInboxUnreadCount(wsId: string | null | undefined): number {
  * Deduplicate inbox items by issue_id (one entry per issue, Linear-style).
  * Exported for consumers to use in useMemo — not in queryOptions select
  * (to avoid new array references on every cache update).
+ *
+ * Result is sorted unread-first: unread representatives rise to the top,
+ * read ones sink to the bottom, and each group keeps newest-first ordering
+ * so users can always find unread inbox without scrolling past read items.
  */
 export function deduplicateInboxItems(items: InboxItem[]): InboxItem[] {
   const active = items.filter((i) => !i.archived);
@@ -105,8 +109,10 @@ export function deduplicateInboxItems(items: InboxItem[]): InboxItem[] {
 
     merged.push(newest);
   }
-  return merged.sort(
-    (a, b) =>
-      new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-  );
+  return merged.sort((a, b) => {
+    const aUnread = !a.read;
+    const bUnread = !b.read;
+    if (aUnread !== bUnread) return aUnread ? -1 : 1;
+    return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  });
 }
