@@ -59,7 +59,13 @@ type UpdateAgentEnvRequest struct {
 //     impersonation/lateral-movement risk that motivated MUL-2600: an
 //     agent running in the workspace cannot use its host's owner
 //     credentials to reveal another agent's secrets.
-//  2. The member must be a workspace owner or admin.
+//  2. The member must be a workspace owner/admin OR the agent's own
+//     owner. This mirrors canManageAgent / canViewAgentSecrets: a plain
+//     member who created an agent already manages it and its secrets
+//     everywhere else, so they must also be able to reveal/edit that
+//     agent's env. Restricting env to owner/admin only (the original
+//     MUL-2600 behaviour) locked ordinary users out of their own
+//     agents' environment variables.
 //
 // Returns the loaded agent and the authenticated member on success.
 // All non-2xx branches write their own response and return ok=false.
@@ -83,8 +89,17 @@ func (h *Handler) authorizeAgentEnv(w http.ResponseWriter, r *http.Request) (db.
 		return db.Agent{}, db.Member{}, false
 	}
 
-	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "agent not found", "owner", "admin")
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "agent not found", "owner", "admin", "member")
 	if !ok {
+		return db.Agent{}, db.Member{}, false
+	}
+
+	// Owner/admin may manage any agent's env; a plain member may only
+	// manage env for agents they own. This matches canManageAgent.
+	isAdmin := roleAllowed(member.Role, "owner", "admin")
+	isAgentOwner := uuidToString(agent.OwnerID) == userID
+	if !isAdmin && !isAgentOwner {
+		writeError(w, http.StatusForbidden, "only the agent owner can manage this agent's env")
 		return db.Agent{}, db.Member{}, false
 	}
 

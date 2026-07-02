@@ -380,8 +380,60 @@ func TestGetAgentEnv_OwnerSucceedsAndAudits(t *testing.T) {
 	}
 }
 
+// TestAgentEnv_PlainMemberOwnerAllowed is the regression test for the
+// bug where an ordinary workspace member could not reveal/edit the env
+// of an agent they themselves own. The original MUL-2600
+// authorizeAgentEnv gated on workspace role only ("owner"/"admin"), so
+// a plain member — even the agent's own owner — got 403 "insufficient
+// permissions". This asserts the corrected contract, mirroring
+// canManageAgent: the agent owner may manage their agent's env
+// regardless of workspace role, while a plain member who does NOT own
+// the agent is still denied.
+func TestAgentEnv_PlainMemberOwnerAllowed(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	agentID, ownerID, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(ctx, `UPDATE agent SET custom_env = '{"KEY_ONE":"v1"}' WHERE id = $1`, agentID); err != nil {
+		t.Fatalf("failed to set custom_env: %v", err)
+	}
+
+	// Agent owner is a plain member (role='member'). Reveal must succeed.
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequestAs(ownerID, http.MethodGet, "/api/agents/"+agentID+"/env", nil), "id", agentID)
+	testHandler.GetAgentEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetAgentEnv as plain-member agent owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp AgentEnvResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !reflect.DeepEqual(resp.CustomEnv, map[string]string{"KEY_ONE": "v1"}) {
+		t.Errorf("CustomEnv mismatch: got %v", resp.CustomEnv)
+	}
+
+	// Same owner can update env.
+	body := map[string]any{"custom_env": map[string]string{"KEY_ONE": "v1", "KEY_TWO": "v2"}}
+	w = httptest.NewRecorder()
+	req = withURLParam(newRequestAs(ownerID, http.MethodPut, "/api/agents/"+agentID+"/env", body), "id", agentID)
+	testHandler.UpdateAgentEnv(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateAgentEnv as plain-member agent owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// A different plain member who does NOT own the agent stays denied.
+	w = httptest.NewRecorder()
+	req = withURLParam(newRequestAs(memberID, http.MethodGet, "/api/agents/"+agentID+"/env", nil), "id", agentID)
+	testHandler.GetAgentEnv(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("GetAgentEnv as non-owner plain member: expected 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestAgentEnv_AgentActorRejected proves the security-critical actor
-// guard: even when the underlying user is a workspace owner, a request
 // arriving from inside a running agent task is denied 403. This is
 // the lateral-movement fix — an agent running with its owner's token
 // cannot reveal a sibling agent's secrets.
