@@ -4,6 +4,9 @@ export type {
   AgentStatus,
   AgentRuntimeMode,
   AgentVisibility,
+  AgentPermissionMode,
+  AgentInvocationTarget,
+  AgentInvocationTargetInput,
   AgentTask,
   AgentActivityBucket,
   AgentRunCount,
@@ -81,6 +84,7 @@ export type {
   ChatPendingTask,
   PendingChatTaskItem,
   PendingChatTasksResponse,
+  HasPendingChatTasksResponse,
   SendChatMessageResponse,
   CancelledChatMessage,
   CancelTaskResponse,
@@ -120,12 +124,25 @@ export type {
   RedeemLarkBindingTokenResponse,
 } from "./lark";
 export type {
+  ComposioToolkit,
+  ComposioConnection,
+  ComposioConnectInitResponse,
+} from "./composio";
+export type {
+  SlackInstallation,
+  ListSlackInstallationsResponse,
+  RegisterSlackBYORequest,
+  RedeemSlackBindingTokenResponse,
+} from "./slack";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,
   AutopilotAssigneeType,
   AutopilotSubscriber,
   AutopilotSubscriberInput,
+  AutopilotCollaborator,
+  AutopilotCollaboratorsResponse,
   AutopilotTrigger,
   AutopilotTriggerKind,
   AutopilotRun,
