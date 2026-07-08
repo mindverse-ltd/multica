@@ -1,10 +1,10 @@
 "use client";
 
-import { Suspense, useEffect, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useRef, useState, type FormEvent } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { sanitizeNextUrl, useAuthStore } from "@multica/core/auth";
-import { workspaceKeys } from "@multica/core/workspace/queries";
+import { workspaceKeys, workspaceListOptions } from "@multica/core/workspace/queries";
 import {
   paths,
   resolvePostAuthDestination,
