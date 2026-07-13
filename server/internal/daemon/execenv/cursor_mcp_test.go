@@ -35,7 +35,7 @@ func TestPrepareCursorMcpConfigWritesProjectConfigAndApprovals(t *testing.T) {
 		}
 	}`)
 
-	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, mcpConfig, manifest)
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, mcpConfig, "", manifest)
 	if err != nil {
 		t.Fatalf("prepareCursorMcpConfig: %v", err)
 	}
@@ -108,6 +108,95 @@ func TestPrepareCursorMcpConfigManagedEmptySet(t *testing.T) {
 	}
 	if len(approvals) != 0 {
 		t.Fatalf("approvals length = %d, want 0: %v", len(approvals), approvals)
+	}
+}
+
+func TestPrepareCursorMcpConfigSeedsExplicitAuthSource(t *testing.T) {
+	t.Parallel()
+
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	sourceProjectDir := filepath.Join(envRoot, "source-project")
+	if err := os.MkdirAll(sourceProjectDir, 0o700); err != nil {
+		t.Fatalf("mkdir source project: %v", err)
+	}
+	sourceAuth := filepath.Join(sourceProjectDir, cursorMcpAuthFile)
+	if err := os.WriteFile(sourceAuth, []byte(`{"tokens":{"fetch":"secret"}}`), 0o600); err != nil {
+		t.Fatalf("write source auth: %v", err)
+	}
+
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}}`), sourceProjectDir, &sidecarManifest{})
+	if err != nil {
+		t.Fatalf("prepareCursorMcpConfig: %v", err)
+	}
+	projectRoot := cursorProjectRoot(workDir)
+	targetAuth := filepath.Join(cursorDataDir, "projects", cursorSlugifyPath(projectRoot), cursorMcpAuthFile)
+	data, err := os.ReadFile(targetAuth)
+	if err != nil {
+		t.Fatalf("read seeded auth: %v", err)
+	}
+	if string(data) != `{"tokens":{"fetch":"secret"}}` {
+		t.Fatalf("seeded auth = %s", data)
+	}
+}
+
+func TestPrepareCursorMcpConfigRemovesPriorAuthOnOptOut(t *testing.T) {
+	t.Parallel()
+
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	sourceProjectDir := filepath.Join(envRoot, "source-project")
+	if err := os.MkdirAll(sourceProjectDir, 0o700); err != nil {
+		t.Fatalf("mkdir source project: %v", err)
+	}
+	sourceAuth := filepath.Join(sourceProjectDir, cursorMcpAuthFile)
+	if err := os.WriteFile(sourceAuth, []byte(`{"tokens":{"fetch":"secret"}}`), 0o600); err != nil {
+		t.Fatalf("write source auth: %v", err)
+	}
+	mcpConfig := json.RawMessage(`{"mcpServers":{"fetch":{"command":"uvx","args":["mcp-server-fetch"]}}}`)
+
+	cursorDataDir, err := prepareCursorMcpConfig(envRoot, workDir, mcpConfig, sourceProjectDir, nil)
+	if err != nil {
+		t.Fatalf("prepareCursorMcpConfig with auth source: %v", err)
+	}
+	projectRoot := cursorProjectRoot(workDir)
+	targetAuth := filepath.Join(cursorDataDir, "projects", cursorSlugifyPath(projectRoot), cursorMcpAuthFile)
+	if _, err := os.Stat(targetAuth); err != nil {
+		t.Fatalf("seeded auth missing: %v", err)
+	}
+
+	cursorDataDir, err = prepareCursorMcpConfig(envRoot, workDir, mcpConfig, "", nil)
+	if err != nil {
+		t.Fatalf("prepareCursorMcpConfig without auth source: %v", err)
+	}
+	targetAuth = filepath.Join(cursorDataDir, "projects", cursorSlugifyPath(projectRoot), cursorMcpAuthFile)
+	if _, err := os.Stat(targetAuth); !os.IsNotExist(err) {
+		t.Fatalf("auth file should be removed after opt-out, stat err=%v", err)
+	}
+}
+
+func TestPrepareCursorMcpConfigRejectsArbitraryAuthSourceFile(t *testing.T) {
+	t.Parallel()
+
+	envRoot := t.TempDir()
+	workDir := filepath.Join(envRoot, "workdir")
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		t.Fatalf("mkdir workDir: %v", err)
+	}
+	source := filepath.Join(envRoot, "other.json")
+	if err := os.WriteFile(source, []byte(`{"secret":true}`), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	_, err := prepareCursorMcpConfig(envRoot, workDir, json.RawMessage(`{"mcpServers":{}}`), source, &sidecarManifest{})
+	if err == nil {
+		t.Fatal("expected non-mcp-auth source file to fail")
 	}
 }
 

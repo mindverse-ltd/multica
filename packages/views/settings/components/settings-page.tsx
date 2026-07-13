@@ -11,14 +11,19 @@ import {
   FlaskConical,
   Bell,
   Plug,
+  MessageCircle,
+  Tags,
+  Keyboard,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
+import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
 import { AccountTab } from "./account-tab";
 import { PreferencesTab } from "./preferences-tab";
+import { ChatTab } from "./chat-tab";
 import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
 import { MembersTab } from "./members-tab";
@@ -27,12 +32,16 @@ import { GitHubTab } from "./github-tab";
 import { IntegrationsTab } from "./integrations-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
+import { LabelsTab } from "./labels-tab";
+import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
 import { useT } from "../../i18n";
 
-const ACCOUNT_TAB_KEYS = ["profile", "preferences", "notifications", "tokens"] as const;
+const ACCOUNT_TAB_KEYS = ["profile", "preferences", "shortcuts", "chat", "notifications", "tokens"] as const;
 const ACCOUNT_TAB_ICONS = {
   profile: User,
   preferences: SlidersHorizontal,
+  shortcuts: Keyboard,
+  chat: MessageCircle,
   notifications: Bell,
   tokens: Key,
 } as const;
@@ -44,6 +53,7 @@ const WORKSPACE_TAB_KEYS = [
   "integrations",
   "labs",
   "members",
+  "labels",
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
@@ -52,6 +62,7 @@ const WORKSPACE_TAB_VALUES = {
   integrations: "integrations",
   labs: "labs",
   members: "members",
+  labels: "labels",
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
@@ -60,6 +71,7 @@ const WORKSPACE_TAB_ICONS = {
   integrations: Plug,
   labs: FlaskConical,
   members: Users,
+  labels: Tags,
 } as const;
 
 const DEFAULT_TAB = "profile";
@@ -72,6 +84,9 @@ const TAB_QUERY_KEY = "tab";
 const LEGACY_WORKSPACE_TAB_REDIRECTS: Record<string, string> = {
   lark: "integrations",
 };
+
+const SETTINGS_TAB_TRIGGER_CLASS =
+  "h-8 shrink-0 px-2.5 hover:bg-surface-hover data-active:!bg-surface-selected data-active:!text-surface-selected-foreground data-active:hover:!bg-surface-selected md:!w-full md:px-2 md:after:hidden";
 
 export interface ExtraSettingsTab {
   value: string;
@@ -89,6 +104,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const { t } = useT("settings");
   const workspaceName = useCurrentWorkspace()?.name;
   const navigation = useNavigation();
+  const isMobile = useIsMobile();
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
   // the default. Whitelisting also blocks junk like ?tab=<script> from
