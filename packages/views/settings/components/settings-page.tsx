@@ -33,6 +33,7 @@ import { IntegrationsTab } from "./integrations-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { LabelsTab } from "./labels-tab";
+import { PropertiesTab } from "./properties-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
 import { useT } from "../../i18n";
 
@@ -54,6 +55,7 @@ const WORKSPACE_TAB_KEYS = [
   "labs",
   "members",
   "labels",
+  "properties",
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
@@ -63,6 +65,7 @@ const WORKSPACE_TAB_VALUES = {
   labs: "labs",
   members: "members",
   labels: "labels",
+  properties: "properties",
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
@@ -72,6 +75,7 @@ const WORKSPACE_TAB_ICONS = {
   labs: FlaskConical,
   members: Users,
   labels: Tags,
+  properties: SlidersHorizontal,
 } as const;
 
 const DEFAULT_TAB = "profile";
