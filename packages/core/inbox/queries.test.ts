@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { InboxItem, InboxWorkspaceUnread } from "../types";
-import { deduplicateInboxItems, hasOtherWorkspaceUnread, inboxKeys, unreadWorkspaceIds } from "./queries";
+import {
+  deduplicateArchivedInboxItems,
+  deduplicateInboxItems,
+  hasOtherWorkspaceUnread,
+  inboxKeys,
+  unreadWorkspaceIds,
+} from "./queries";
 
 function item(overrides: Partial<InboxItem>): InboxItem {
   return {

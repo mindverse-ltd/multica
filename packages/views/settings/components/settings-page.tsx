@@ -14,6 +14,7 @@ import {
   MessageCircle,
   Tags,
   Keyboard,
+  ListTodo,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
@@ -24,6 +25,7 @@ import { PageHeader } from "../../layout/page-header";
 import { AccountTab } from "./account-tab";
 import { PreferencesTab } from "./preferences-tab";
 import { ChatTab } from "./chat-tab";
+import { IssueTab } from "./issue-tab";
 import { TokensTab } from "./tokens-tab";
 import { WorkspaceTab } from "./workspace-tab";
 import { MembersTab } from "./members-tab";
@@ -37,11 +39,12 @@ import { PropertiesTab } from "./properties-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
 import { useT } from "../../i18n";
 
-const ACCOUNT_TAB_KEYS = ["profile", "preferences", "shortcuts", "chat", "notifications", "tokens"] as const;
+const ACCOUNT_TAB_KEYS = ["profile", "preferences", "shortcuts", "issue", "chat", "notifications", "tokens"] as const;
 const ACCOUNT_TAB_ICONS = {
   profile: User,
   preferences: SlidersHorizontal,
   shortcuts: Keyboard,
+  issue: ListTodo,
   chat: MessageCircle,
   notifications: Bell,
   tokens: Key,
