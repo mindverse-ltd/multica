@@ -15,7 +15,7 @@ Multica は **16 個の AI コーディングツール**を標準でサポート
 |---|---|---|---|---|---|
 | **Antigravity** | Google | ✅ (`--conversation <id>`) | ❌ | `.agents/skills/` | 動的探索（`agy models`） |
 | **Claude Code** | Anthropic | ✅ | ✅ | `.claude/skills/` | 静的 + flag |
-| **CodeBuddy** | Tencent | ✅ | ✅ | `.claude/skills/` | 動的探索 |
+| **CodeBuddy** | Tencent | ✅ | ✅ | `.codebuddy/skills/` | 動的探索 |
 | **Codex** | OpenAI | ✅ | ✅ | `$CODEX_HOME/skills/` | 静的 |
 | **Copilot** | GitHub | ✅ | ❌ | `.github/skills/` | 静的（アカウントの権限で決定） |
 | **Cursor** | Anysphere | ✅ | ✅ | `.cursor/skills/` | 動的探索 |
@@ -42,7 +42,7 @@ Anthropic が提供します。**新規ユーザーにとって第一の選択�
 
 ### CodeBuddy
 
-Tencent が提供します。Claude Code 互換の CLI エージェントです — Multica は Claude Code と同じ stream-json プロトコルで駆動するため、セッション再開が動作し（`--resume` 経由）、MCP 構成は `--mcp-config` で渡され、スキルは Claude Code の `.claude/skills/` レイアウトを使用します。モデルは動的に探索されます。
+Tencent が提供します。Claude Code 互換の CLI エージェントです — Multica は Claude Code と同じ stream-json プロトコルで駆動するため、セッション再開が動作し（`--resume` 経由）、MCP 構成は `--mcp-config` で渡されます。CodeBuddy は Claude のディレクトリを再利用せず独自の設定ディレクトリを使うため、スキルは `.codebuddy/skills/` に配置され、ランタイムのブリーフは `CODEBUDDY.md` に書き込まれます。モデルは動的に探索されます。
 
 ### Codex
 
@@ -58,7 +58,7 @@ Anysphere が提供し、Cursor エディターに対応する CLI です。**�
 
 ### Hermes
 
-Nous Research が提供します。ACP プロトコルを使用します（Kimi とトランスポート層を共有します）。セッション再開が動作し、MCP 構成は ACP `mcpServers` として渡されます。Hermes はスキルを自身のホームディレクトリ（`~/.hermes/skills/`）と設定済みの `skills.external_dirs` からのみ探索し、ワークスペース相対の探索は行いません。そのため、**エージェントにスキルが割り当てられている場合のみ**、Multica は `HERMES_HOME` をユーザーの `~/.hermes/` のタスクごとオーバーレイに向けます。実ホームはシンボリックリンクでミラーされ（auth／シークレットも含むためトークン更新が伝播します）、派生した `config.yaml` が既存スキルを読み取り専用の external root として参照し、割り当てられたスキルだけがその `skills/` ディレクトリに書き込まれて優先されます。グローバルスキルはそのまま機能します。Multica は共有の `~/.hermes/` を直接書き換えず、読み取ってリンクするだけですが、Hermes 自身がミラーされたシンボリックリンク経由で書き込む場合（トークン更新など）は伝播します。`custom_args` の `-p`/`--profile` 指定は尊重されます。オーバーレイはその profile のホームからシードされ、フラグは起動コマンドから消費されるため、オーバーレイを迂回できません。タスクの記憶はタスクごとに隔離されます。新しい `memories/` ディレクトリに加え、派生設定で外部 `memory.provider` バックエンドを無効化するので、ディスク上のメモも共有の Supermemory/Hindsight 的バンクもタスク間で共有されません（マネージドで agent スコープの記憶バックエンドは今後の別課題です）。スキルが割り当てられていない Hermes タスクは実ホームのまま変わりません。なお home のプラットフォーム既定はネイティブ Windows では `%LOCALAPPDATA%\hermes` です。
+Nous Research が提供します。ACP プロトコルを使用します（Kimi とトランスポート層を共有します）。セッション再開が動作し、MCP 構成は ACP `mcpServers` として渡されます。Hermes はスキルを自身のホームディレクトリ（`~/.hermes/skills/`）と設定済みの `skills.external_dirs` からのみ探索し、ワークスペース相対の探索は行いません。そのため、**エージェントにスキルが割り当てられている場合のみ**、Multica は `HERMES_HOME` をユーザーの `~/.hermes/` のタスクごとオーバーレイに向けます。実ホームはシンボリックリンクでミラーされ（auth／シークレットも含むためトークン更新が伝播します）、派生した `config.yaml` が既存スキルを読み取り専用の external root として参照し、割り当てられたスキルだけがその `skills/` ディレクトリに書き込まれて優先されます。グローバルスキルはそのまま機能します。Multica は共有の `~/.hermes/` を直接書き換えず、読み取ってリンクするだけですが、Hermes 自身がミラーされたシンボリックリンク経由で書き込む場合（トークン更新など）は伝播します。`custom_args` の `-p`/`--profile` 指定は尊重されます。オーバーレイはその profile のホームからシードされ、フラグは起動コマンドから消費されるため、オーバーレイを迂回できません。タスクの記憶はタスクごとに隔離されます。新しい `memories/` ディレクトリに加え、派生設定で外部 `memory.provider` バックエンドを無効化するので、ディスク上のメモも共有の Supermemory/Hindsight 的バンクもタスク間で共有されません（マネージドで agent スコープの記憶バックエンドは今後の別課題です）。SQLite の `state.db` セッションストアとジャーナルファイルもタスクローカルで、Hermes がオーバーレイ内に作成します。ホストの会話履歴はリンクもコピーもされず、Windows で稼働中の WAL ロックがセットアップを妨げることもありません。スキルが割り当てられていない Hermes タスクは実ホームのまま変わりません。なお home のプラットフォーム既定はネイティブ Windows では `%LOCALAPPDATA%\hermes` です。
 
 **Hermes profile を選択する。** 特定の profile で Hermes を起動するには、エージェントの `custom_args` に profile フラグと profile 名を 2 つの独立したエントリとして設定します。たとえば `research` という profile を使う場合:
 
@@ -125,7 +125,7 @@ xAI の Grok Build CLI（`grok`）です。Multica は `grok --no-auto-update ag
 | ツール | パス | ネイティブ探索か |
 |---|---|---|
 | Claude Code | `.claude/skills/` | ✅ ネイティブ |
-| CodeBuddy | `.claude/skills/` | ✅ ネイティブ |
+| CodeBuddy | `.codebuddy/skills/` | ✅ ネイティブ |
 | Codex | `$CODEX_HOME/skills/` | ✅ ネイティブ |
 | Copilot | `.github/skills/` | ✅ ネイティブ |
 | Cursor | `.cursor/skills/` | ✅ ネイティブ |

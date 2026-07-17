@@ -15,7 +15,7 @@ Multica는 **16개의 AI 코딩 도구**를 기본 지원합니다. 이들은 �
 |---|---|---|---|---|---|
 | **Antigravity** | Google | ✅ (`--conversation <id>`) | ❌ | `.agents/skills/` | 동적 탐색(`agy models`) |
 | **Claude Code** | Anthropic | ✅ | ✅ | `.claude/skills/` | 정적 + flag |
-| **CodeBuddy** | Tencent | ✅ | ✅ | `.claude/skills/` | 동적 탐색 |
+| **CodeBuddy** | Tencent | ✅ | ✅ | `.codebuddy/skills/` | 동적 탐색 |
 | **Codex** | OpenAI | ✅ | ✅ | `$CODEX_HOME/skills/` | 정적 |
 | **Copilot** | GitHub | ✅ | ❌ | `.github/skills/` | 정적 (계정 권한으로 결정) |
 | **Cursor** | Anysphere | ✅ | ✅ | `.cursor/skills/` | 동적 탐색 |
@@ -42,7 +42,7 @@ Anthropic에서 제공합니다. **신규 사용자에게 첫 번째 선택지**
 
 ### CodeBuddy
 
-Tencent에서 제공합니다. Claude Code 호환 CLI 에이전트입니다 — Multica는 Claude Code와 동일한 stream-json 프로토콜로 구동하므로 세션 재개가 동작하고(`--resume` 경유), MCP 구성은 `--mcp-config`로 전달되며, 스킬은 Claude Code의 `.claude/skills/` 레이아웃을 사용합니다. 모델은 동적으로 탐색됩니다.
+Tencent에서 제공합니다. Claude Code 호환 CLI 에이전트입니다 — Multica는 Claude Code와 동일한 stream-json 프로토콜로 구동하므로 세션 재개가 동작하고(`--resume` 경유), MCP 구성은 `--mcp-config`로 전달됩니다. CodeBuddy는 Claude의 디렉터리를 재사용하지 않고 자체 설정 디렉터리를 사용하므로, 스킬은 `.codebuddy/skills/`에 배치되고 런타임 브리핑은 `CODEBUDDY.md`에 기록됩니다. 모델은 동적으로 탐색됩니다.
 
 ### Codex
 
@@ -58,7 +58,7 @@ Anysphere에서 제공하며, Cursor 에디터에 대응하는 CLI입니다. **�
 
 ### Hermes
 
-Nous Research에서 제공합니다. ACP 프로토콜을 사용합니다(Kimi와 전송 계층을 공유합니다). 세션 재개가 동작하고, MCP 구성은 ACP `mcpServers`로 전달됩니다. Hermes는 스킬을 자신의 홈 디렉터리(`~/.hermes/skills/`)와 설정된 `skills.external_dirs`에서만 탐색하며, 워크스페이스 상대 탐색은 하지 않습니다. 그래서 **에이전트에 스킬이 할당된 경우에만** Multica는 `HERMES_HOME`을 사용자 `~/.hermes/`의 작업별 오버레이로 향하게 합니다. 실제 홈은 심링크로 미러되고(auth/시크릿 포함, 토큰 갱신이 전파됨), 파생된 `config.yaml`이 기존 스킬을 읽기 전용 external root로 참조하며, 할당된 스킬만 그 `skills/` 디렉터리에 기록되어 우선합니다. 전역 스킬은 그대로 동작합니다. Multica는 공유 `~/.hermes/`를 직접 수정하지 않고 읽어서 링크만 하지만, Hermes가 미러된 심링크를 통해 쓰는 경우(토큰 갱신 등)는 전파됩니다. `custom_args`의 `-p`/`--profile` 선택은 존중됩니다. 오버레이는 그 profile의 홈에서 시드되고, 플래그는 실행 명령에서 소비되어 오버레이를 우회할 수 없습니다. 작업 메모리는 작업별로 격리됩니다. 새 `memories/` 디렉터리에 더해 파생 설정에서 외부 `memory.provider` 백엔드를 비활성화하므로, 디스크상의 메모도 공유 Supermemory/Hindsight 류의 뱅크도 작업 간에 공유되지 않습니다(관리형 agent 범위 메모리 백엔드는 향후 별도 과제입니다). 스킬이 할당되지 않은 Hermes 작업은 실제 홈 그대로 실행됩니다. 참고로 홈의 플랫폼 기본값은 네이티브 Windows에서 `%LOCALAPPDATA%\hermes`입니다.
+Nous Research에서 제공합니다. ACP 프로토콜을 사용합니다(Kimi와 전송 계층을 공유합니다). 세션 재개가 동작하고, MCP 구성은 ACP `mcpServers`로 전달됩니다. Hermes는 스킬을 자신의 홈 디렉터리(`~/.hermes/skills/`)와 설정된 `skills.external_dirs`에서만 탐색하며, 워크스페이스 상대 탐색은 하지 않습니다. 그래서 **에이전트에 스킬이 할당된 경우에만** Multica는 `HERMES_HOME`을 사용자 `~/.hermes/`의 작업별 오버레이로 향하게 합니다. 실제 홈은 심링크로 미러되고(auth/시크릿 포함, 토큰 갱신이 전파됨), 파생된 `config.yaml`이 기존 스킬을 읽기 전용 external root로 참조하며, 할당된 스킬만 그 `skills/` 디렉터리에 기록되어 우선합니다. 전역 스킬은 그대로 동작합니다. Multica는 공유 `~/.hermes/`를 직접 수정하지 않고 읽어서 링크만 하지만, Hermes가 미러된 심링크를 통해 쓰는 경우(토큰 갱신 등)는 전파됩니다. `custom_args`의 `-p`/`--profile` 선택은 존중됩니다. 오버레이는 그 profile의 홈에서 시드되고, 플래그는 실행 명령에서 소비되어 오버레이를 우회할 수 없습니다. 작업 메모리는 작업별로 격리됩니다. 새 `memories/` 디렉터리에 더해 파생 설정에서 외부 `memory.provider` 백엔드를 비활성화하므로, 디스크상의 메모도 공유 Supermemory/Hindsight 류의 뱅크도 작업 간에 공유되지 않습니다(관리형 agent 범위 메모리 백엔드는 향후 별도 과제입니다). `state.db` SQLite 세션 저장소와 저널 파일도 작업 로컬이며 Hermes가 오버레이 안에서 생성합니다. 호스트 대화 기록은 링크되거나 복사되지 않고, Windows에서 활성 WAL 잠금이 환경 준비를 막지 않습니다. 스킬이 할당되지 않은 Hermes 작업은 실제 홈 그대로 실행됩니다. 참고로 홈의 플랫폼 기본값은 네이티브 Windows에서 `%LOCALAPPDATA%\hermes`입니다.
 
 **Hermes profile 선택.** 특정 profile로 Hermes를 실행하려면 에이전트의 `custom_args`에 profile 플래그와 profile 이름을 두 개의 독립된 항목으로 설정하세요. 예를 들어 `research`라는 profile을 사용하려면:
 
@@ -125,7 +125,7 @@ xAI의 Grok Build CLI(`grok`)입니다. Multica는 `grok --no-auto-update agent 
 | 도구 | 경로 | 기본 탐색 여부 |
 |---|---|---|
 | Claude Code | `.claude/skills/` | ✅ 기본 |
-| CodeBuddy | `.claude/skills/` | ✅ 기본 |
+| CodeBuddy | `.codebuddy/skills/` | ✅ 기본 |
 | Codex | `$CODEX_HOME/skills/` | ✅ 기본 |
 | Copilot | `.github/skills/` | ✅ 기본 |
 | Cursor | `.cursor/skills/` | ✅ 기본 |

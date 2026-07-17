@@ -15,7 +15,7 @@ Multica 内置支持 **16 款 AI 编程工具**。它们都实现了同一套接
 |---|---|---|---|---|---|
 | **Antigravity** | Google | ✅（`--conversation <id>`）| ❌ | `.agents/skills/` | 动态发现（`agy models`）|
 | **Claude Code** | Anthropic | ✅ | ✅ | `.claude/skills/` | 静态 + flag |
-| **CodeBuddy** | Tencent | ✅ | ✅ | `.claude/skills/` | 动态发现 |
+| **CodeBuddy** | Tencent | ✅ | ✅ | `.codebuddy/skills/` | 动态发现 |
 | **Codex** | OpenAI | ✅ | ✅ | `$CODEX_HOME/skills/` | 静态 |
 | **Copilot** | GitHub | ✅ | ❌ | `.github/skills/` | 静态（账号权益决定）|
 | **Cursor** | Anysphere | ✅ | ✅ | `.cursor/skills/` | 动态发现 |
@@ -42,7 +42,7 @@ Anthropic 出品。**新用户首选**——功能最完整：会话恢复真用
 
 ### CodeBuddy
 
-Tencent 出品。一款兼容 Claude Code 的 CLI agent——Multica 用和 Claude Code 一样的 stream-json 协议驱动它，所以会话恢复可用（通过 `--resume`），MCP 配置通过 `--mcp-config` 传入，skill 沿用 Claude Code 的 `.claude/skills/` 布局。模型为动态发现。
+Tencent 出品。一款兼容 Claude Code 的 CLI agent——Multica 用和 Claude Code 一样的 stream-json 协议驱动它，所以会话恢复可用（通过 `--resume`），MCP 配置通过 `--mcp-config` 传入。CodeBuddy 使用自己原生的配置目录，而不是复用 Claude 的，所以 skill 放在 `.codebuddy/skills/`，运行时说明写入 `CODEBUDDY.md`。模型为动态发现。
 
 ### Codex
 
@@ -58,7 +58,7 @@ Anysphere 出品，Cursor 编辑器的 CLI 对应物。**会话恢复可用**—
 
 ### Hermes
 
-Nous Research 出品。使用 ACP 协议（和 Kimi 共享传输层）。会话恢复真用，MCP 配置通过 ACP `mcpServers` 传入。Hermes 只从自己的 home 目录（`~/.hermes/skills/`）和配置的 `skills.external_dirs` 发现 skill，没有工作区相对发现。因此，**只有当智能体分配了 skill 时**，Multica 才会把 `HERMES_HOME` 指向你 `~/.hermes/` 的单次任务 overlay：真实 home 用软链镜像（含 auth／密钥，令牌刷新可传播），派生的 `config.yaml` 把你已有的 skill 作为只读 external root 引用，只有被分配的 skill 写入它的 `skills/` 目录并具更高优先级。你的全局 skill 照常可用。Multica 不会直接写你的共享 `~/.hermes/`（只读取并链接进去），但 Hermes 自己通过被镜像的软链写入时（如刷新令牌）会传播。`custom_args` 里的 `-p`/`--profile` 选择会被尊重：overlay 从该 profile 的 home 播种，且该标志会从启动命令里消费掉，无法绕过 overlay。任务记忆按任务隔离：一个全新的 `memories/` 目录，外加在派生配置里禁用外部 `memory.provider` 后端，所以磁盘上的笔记和共享的 Supermemory/Hindsight 之类记忆库都不会在任务间串用（受管、按 agent 隔离的记忆后端是后续单独决策）。没有分配 skill 的 Hermes 任务按真实 home 原样运行。另外,home 的平台默认值在原生 Windows 上是 `%LOCALAPPDATA%\hermes`。
+Nous Research 出品。使用 ACP 协议（和 Kimi 共享传输层）。会话恢复真用，MCP 配置通过 ACP `mcpServers` 传入。Hermes 只从自己的 home 目录（`~/.hermes/skills/`）和配置的 `skills.external_dirs` 发现 skill，没有工作区相对发现。因此，**只有当智能体分配了 skill 时**，Multica 才会把 `HERMES_HOME` 指向你 `~/.hermes/` 的单次任务 overlay：真实 home 用软链镜像（含 auth／密钥，令牌刷新可传播），派生的 `config.yaml` 把你已有的 skill 作为只读 external root 引用，只有被分配的 skill 写入它的 `skills/` 目录并具更高优先级。你的全局 skill 照常可用。Multica 不会直接写你的共享 `~/.hermes/`（只读取并链接进去），但 Hermes 自己通过被镜像的软链写入时（如刷新令牌）会传播。`custom_args` 里的 `-p`/`--profile` 选择会被尊重：overlay 从该 profile 的 home 播种，且该标志会从启动命令里消费掉，无法绕过 overlay。任务记忆按任务隔离：一个全新的 `memories/` 目录，外加在派生配置里禁用外部 `memory.provider` 后端，所以磁盘上的笔记和共享的 Supermemory/Hindsight 之类记忆库都不会在任务间串用（受管、按 agent 隔离的记忆后端是后续单独决策）。`state.db` SQLite 会话库及其日志文件也按任务隔离，由 Hermes 在 overlay 内创建；宿主会话历史不会被链接或复制，Windows 上运行中的 WAL 锁也不会阻塞环境准备。没有分配 skill 的 Hermes 任务按真实 home 原样运行。另外,home 的平台默认值在原生 Windows 上是 `%LOCALAPPDATA%\hermes`。
 
 **指定 Hermes profile。** 要让 Hermes 使用某个 profile 启动，把智能体的 `custom_args` 设成 profile flag 和 profile 名两个独立条目。例如使用名为 `research` 的 profile：
 
@@ -125,7 +125,7 @@ xAI 的 Grok Build CLI（`grok`）。Multica 通过 `grok --no-auto-update agent
 | 工具 | 路径 | 是否原生发现 |
 |---|---|---|
 | Claude Code | `.claude/skills/` | ✅ 原生 |
-| CodeBuddy | `.claude/skills/` | ✅ 原生 |
+| CodeBuddy | `.codebuddy/skills/` | ✅ 原生 |
 | Codex | `$CODEX_HOME/skills/` | ✅ 原生 |
 | Copilot | `.github/skills/` | ✅ 原生 |
 | Cursor | `.cursor/skills/` | ✅ 原生 |
