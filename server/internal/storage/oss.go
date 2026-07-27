@@ -230,6 +230,26 @@ func (s *OSSStorage) Delete(ctx context.Context, key string) {
 	}
 }
 
+// DeleteObject is Delete with the error surfaced — the media reconciler needs
+// it to keep the ledger row and schedule a retry instead of assuming success.
+func (s *OSSStorage) DeleteObject(ctx context.Context, key string) error {
+	if key == "" {
+		return nil
+	}
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	return err
+}
+
+// ObjectURL is the URL a successful Upload of key would return — a pure
+// function of configuration, so the media intent ledger can persist it
+// BEFORE the upload.
+func (s *OSSStorage) ObjectURL(key string) string {
+	return s.uploadedURL(key)
+}
+
 // DeleteKeys removes multiple objects from OSS. Best-effort, errors are logged.
 func (s *OSSStorage) DeleteKeys(ctx context.Context, keys []string) {
 	for _, key := range keys {
