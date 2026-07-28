@@ -953,7 +953,13 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 	semanticActivityCh := make(chan codexSemanticEvent, 256)
 
 	var outputMu sync.Mutex
-	var output strings.Builder
+	// Result.Output is "final user-facing output selected by the backend"
+	// (agent.go), so it holds the deliverable only. finalAnswer is the text the
+	// app-server labelled `phase: "final_answer"`; lastAgentMessage is the
+	// fallback for the legacy `agent_message` protocol, which carries no phase.
+	// Every agent message still flows to msgCh, so the transcript is unchanged —
+	// only what the daemon forwards to a chat/channel reply narrows (GH #6006).
+	var finalAnswer, lastAgentMessage string
 	var semanticObserved atomic.Bool
 	turnNotificationGate := &codexTurnNotificationGate{}
 
@@ -982,11 +988,16 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 			logCodexAgentMessage(b.cfg.Logger, msg)
 			if msg.Type == MessageText {
 				outputMu.Lock()
-				output.WriteString(msg.Content)
+				lastAgentMessage = msg.Content
 				outputMu.Unlock()
 			}
 			trySend(msgCh, msg)
 			trySendCodexSemanticEvent(semanticActivityCh, codexSemanticEventFromMessage(msg))
+		},
+		onFinalAnswer: func(text string) {
+			outputMu.Lock()
+			finalAnswer = text
+			outputMu.Unlock()
 		},
 		onSemanticActivity: func(description string) {
 			semanticObserved.Store(true)
@@ -1518,7 +1529,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 		}
 
 		outputMu.Lock()
-		finalOutput := output.String()
+		finalOutput := codexDeliverableOutput(finalAnswer, lastAgentMessage)
 		outputMu.Unlock()
 
 		// Build usage map from accumulated codex usage.
@@ -1876,6 +1887,19 @@ func trySendCodexSemanticEvent(ch chan<- codexSemanticEvent, value codexSemantic
 	}
 }
 
+// codexDeliverableOutput picks Result.Output from what the turn produced: the
+// message the app-server itself labelled `phase: "final_answer"`, or — for the
+// legacy `agent_message` protocol, which carries no phase — the most recent
+// agent message. Never every message joined: the intermediate ones narrate the
+// work between tool calls, which belongs to the transcript and not to a chat or
+// IM reply (GH #6006).
+func codexDeliverableOutput(finalAnswer, lastAgentMessage string) string {
+	if finalAnswer != "" {
+		return finalAnswer
+	}
+	return lastAgentMessage
+}
+
 func logCodexAgentMessage(logger *slog.Logger, msg Message) {
 	if logger == nil {
 		return
@@ -1929,6 +1953,12 @@ type codexClient struct {
 	onMessage          func(Message)
 	onSemanticActivity func(description string)
 	onTurnDone         func(aborted bool)
+	// onFinalAnswer fires only for an agent message the app-server itself
+	// labelled `phase: "final_answer"` — the turn's deliverable, as opposed to
+	// the intermediate agent messages that narrate work between tool calls.
+	// Both still reach onMessage: the transcript keeps the whole timeline, only
+	// Result.Output is narrowed to the deliverable (GH #6006).
+	onFinalAnswer func(text string)
 	// acceptNotification isolates the active turn from same-thread history
 	// replay emitted while thread/resume is restoring prior conversation.
 	// Unit-level protocol tests leave it nil and exercise dispatch directly.
@@ -2645,8 +2675,17 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 			c.onMessage(Message{Type: MessageText, Content: text})
 		}
 		phase, _ := item["phase"].(string)
-		if phase == "final_answer" && c.turnStarted {
-			if c.onTurnDone != nil {
+		if phase == "final_answer" {
+			// Deliberately NOT gated on turnStarted, unlike onTurnDone below:
+			// the gate exists so a subagent or a replayed history turn cannot
+			// end OUR turn early, and the thread guard at the top of this
+			// function already keeps foreign threads out. A final answer that
+			// arrives before we observed turn/started is still this thread's
+			// deliverable, and dropping it would fall back to narration.
+			if text != "" && c.onFinalAnswer != nil {
+				c.onFinalAnswer(text)
+			}
+			if c.turnStarted && c.onTurnDone != nil {
 				c.onTurnDone(false)
 			}
 		}
