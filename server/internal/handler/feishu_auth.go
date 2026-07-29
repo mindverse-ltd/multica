@@ -185,7 +185,7 @@ func (h *Handler) FeishuLogin(w http.ResponseWriter, r *http.Request) {
 	slog.Info("user logged in via feishu", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "open_id", profile.Data.OpenID, "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 	})
 }
 
@@ -517,7 +517,7 @@ func (h *Handler) FeishuBindEmail(w http.ResponseWriter, r *http.Request) {
 		slog.Info("feishu identity linked to existing user", "user_id", uuidToString(existingUser.ID), "email", email, "open_id", pending.OpenID)
 		writeJSON(w, http.StatusOK, LoginResponse{
 			Token: tokenString,
-			User:  userToResponse(existingUser),
+			User:  h.userToResponse(existingUser),
 		})
 		return
 	}
@@ -603,7 +603,7 @@ func (h *Handler) FeishuBindEmail(w http.ResponseWriter, r *http.Request) {
 	slog.Info("user registered via feishu with email", "user_id", uuidToString(user.ID), "email", email, "open_id", pending.OpenID)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 	})
 }
 

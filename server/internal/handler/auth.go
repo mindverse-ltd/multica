@@ -74,7 +74,7 @@ type UserResponse struct {
 // doesn't move the needle on prompt cost.
 const MaxProfileDescriptionLen = 2000
 
-func userToResponse(u db.User) UserResponse {
+func (h *Handler) userToResponse(u db.User) UserResponse {
 	// JSONB column is []byte with DEFAULT '{}', so it's never nil at the DB
 	// level. Defensive coalesce just in case a future ALTER makes the column
 	// nullable and some row comes back with no default applied.
@@ -86,7 +86,7 @@ func userToResponse(u db.User) UserResponse {
 		ID:                      uuidToString(u.ID),
 		Name:                    u.Name,
 		Email:                   u.Email,
-		AvatarURL:               textToPtr(u.AvatarUrl),
+		AvatarURL:               h.resolveAvatarURLPtr(textToPtr(u.AvatarUrl)),
 		Language:                textToPtr(u.Language),
 		Timezone:                textToPtr(u.Timezone),
 		OnboardedAt:             timestampToPtr(u.OnboardedAt),
@@ -511,7 +511,7 @@ func (h *Handler) VerifyCode(w http.ResponseWriter, r *http.Request) {
 	slog.Info("user logged in", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 	})
 }
 
@@ -578,7 +578,7 @@ func (h *Handler) PasswordLogin(w http.ResponseWriter, r *http.Request) {
 	slog.Info("user logged in via temporary password", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 	})
 }
 
@@ -594,7 +594,7 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, userToResponse(user))
+	writeJSON(w, http.StatusOK, h.userToResponse(user))
 }
 
 type UpdateMeRequest struct {
@@ -772,7 +772,7 @@ func (h *Handler) GoogleLogin(w http.ResponseWriter, r *http.Request) {
 	slog.Info("user logged in via google", append(logger.RequestAttrs(r), "user_id", uuidToString(user.ID), "email", user.Email)...)
 	writeJSON(w, http.StatusOK, LoginResponse{
 		Token: tokenString,
-		User:  userToResponse(user),
+		User:  h.userToResponse(user),
 	})
 }
 
@@ -838,7 +838,11 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		Name: name,
 	}
 	if req.AvatarURL != nil {
-		params.AvatarUrl = pgtype.Text{String: strings.TrimSpace(*req.AvatarURL), Valid: true}
+		avatarURL, ok := h.acceptAvatarURL(w, r, *req.AvatarURL, currentUser.AvatarUrl.String)
+		if !ok {
+			return
+		}
+		params.AvatarUrl = pgtype.Text{String: avatarURL, Valid: true}
 	}
 	if req.Language != nil {
 		lang := strings.TrimSpace(*req.Language)
@@ -880,5 +884,5 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, userToResponse(updatedUser))
+	writeJSON(w, http.StatusOK, h.userToResponse(updatedUser))
 }

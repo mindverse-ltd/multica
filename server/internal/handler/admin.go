@@ -179,7 +179,7 @@ func (h *Handler) CreateMemberByUserID(w http.ResponseWriter, r *http.Request) {
 		WorkspaceID: parseUUID(workspaceID),
 	})
 	if err == nil {
-		writeJSON(w, http.StatusOK, memberWithUserResponse(existingMember, user))
+		writeJSON(w, http.StatusOK, h.memberWithUserResponse(existingMember, user))
 		return
 	}
 	if !isNotFound(err) {
@@ -201,5 +201,5 @@ func (h *Handler) CreateMemberByUserID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, memberWithUserResponse(member, user))
+	writeJSON(w, http.StatusCreated, h.memberWithUserResponse(member, user))
 }
