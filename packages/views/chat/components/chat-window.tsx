@@ -43,11 +43,15 @@ import {
 import {
   useCreateChatSession,
   useMarkChatSessionRead,
+  useRegenerateChatQuickActions,
   useSetChatSessionArchived,
   useSetChatSessionProject,
   useUpdateChatSession,
 } from "@multica/core/chat/mutations";
 import { useChatStore } from "@multica/core/chat";
+import { chatQuickActionsPendingOptions } from "@multica/core/chat/queries";
+import { useQuickActionsPendingTimeout } from "@multica/core/chat/use-quick-actions-pending-timeout";
+import { useQuickActionsFailureToast } from "./use-quick-actions-failure-toast";
 import { removeChatMessageFromCaches } from "@multica/core/realtime";
 import { useChatDraftRestore } from "./use-chat-draft-restore";
 import { useChatInputFocus } from "./use-chat-input-focus";
@@ -107,6 +111,15 @@ export function ChatWindow() {
   const wsId = useWorkspaceId();
   const isOpen = useChatStore((s) => s.isOpen);
   const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const { data: quickActionsPending = null } = useQuery(
+    chatQuickActionsPendingOptions(activeSessionId ?? ""),
+  );
+  // Drop a stuck pending marker (dead daemon / failed supplement) so the pill
+  // spinner stops and a later refresh starts clean (MUL-5149).
+  useQuickActionsPendingTimeout(activeSessionId ?? null, quickActionsPending);
+  // Toast when an accepted refresh later fails in the daemon (async half).
+  useQuickActionsFailureToast(activeSessionId ?? null);
+  const regenerateQuickActions = useRegenerateChatQuickActions();
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
   const selectedProjectId = useChatStore((s) => s.selectedProjectId);
   const setOpen = useChatStore((s) => s.setOpen);
@@ -829,6 +842,19 @@ export function ChatWindow() {
           hasOlderMessages={!!hasOlderMessages}
           isFetchingOlderMessages={isFetchingOlderMessages}
           onLoadOlderMessages={() => void fetchOlderMessages()}
+          onQuickAction={(action) => handleSend(action.prompt)}
+          quickActionsDisabled={
+            !!pendingTaskId || isSessionArchived || isAgentArchived || noAgent
+          }
+          onRegenerateQuickActions={(message) =>
+            activeSessionId
+              ? regenerateQuickActions.mutateAsync({
+                  sessionId: activeSessionId,
+                  messageId: message.id,
+                })
+              : undefined
+          }
+          quickActionsPendingMessageId={quickActionsPending?.message_id ?? null}
         />
       ) : (
         <EmptyState
