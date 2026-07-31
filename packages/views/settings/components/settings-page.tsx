@@ -15,6 +15,7 @@ import {
   Tags,
   Keyboard,
   ListTodo,
+  Zap,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
@@ -36,6 +37,7 @@ import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { LabelsTab } from "./labels-tab";
 import { PropertiesTab } from "./properties-tab";
+import { QuickActionsTab } from "./quick-actions-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
 import { useT } from "../../i18n";
 
@@ -59,6 +61,7 @@ const WORKSPACE_TAB_KEYS = [
   "members",
   "labels",
   "properties",
+  "quick_actions",
 ] as const;
 const WORKSPACE_TAB_VALUES = {
   general: "workspace",
@@ -69,6 +72,7 @@ const WORKSPACE_TAB_VALUES = {
   members: "members",
   labels: "labels",
   properties: "properties",
+  quick_actions: "quick-actions",
 } as const;
 const WORKSPACE_TAB_ICONS = {
   general: Settings,
@@ -79,6 +83,7 @@ const WORKSPACE_TAB_ICONS = {
   members: Users,
   labels: Tags,
   properties: SlidersHorizontal,
+  quick_actions: Zap,
 } as const;
 
 const DEFAULT_TAB = "profile";

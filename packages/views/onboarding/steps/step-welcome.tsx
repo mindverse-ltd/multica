@@ -90,7 +90,7 @@ export function StepWelcome({
             </h1>
 
             <div className="flex flex-col gap-4">
-              <p className="text-title leading-relaxed text-foreground/85">
+              <p className="text-title leading-relaxed text-foreground">
                 {t(($) => $.welcome.lede)}
               </p>
               <p className="text-body leading-relaxed text-muted-foreground">
@@ -295,7 +295,7 @@ function MockActivityCard({
         </span>
       </div>
 
-      <p className="mt-2.5 text-body leading-snug text-foreground/85">
+      <p className="mt-2.5 text-body leading-snug text-foreground">
         {content}
       </p>
 
