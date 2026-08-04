@@ -1506,7 +1506,7 @@ func (b *codexBackend) executeOnce(ctx context.Context, prompt string, opts Exec
 					firstTurnNoProgressTimerC = firstTurnNoProgressTimer.C
 				} else if firstTurnStarted && !firstTurnProgressObserved && isCodexFirstTurnProgressActivity(description) {
 					firstTurnProgressObserved = true
-					if activity == "error:terminal" {
+					if description == "error:terminal" {
 						finishFirstItemWait("turn_failed")
 					} else {
 						finishFirstItemWait("progress")
