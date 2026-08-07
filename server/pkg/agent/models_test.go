@@ -473,52 +473,6 @@ nonprefixed-line
 	}
 }
 
-func TestParsePiModelsTabularFormat(t *testing.T) {
-	// Actual output from pi v0.22.4+ (the format pi has used since
-	// --list-models was introduced in December 2025).
-	input := `provider  model                                       context  max-out  thinking  images
-doubao    glm-4.7                                     200K     131.1K   yes       no
-doubao    kimi-k2.5                                   256K     131.1K   no        no
-glm       glm-5.1                                     124.8K   131.1K   yes       no
-google    gemini-2.5-pro                              1.0M     65.5K    yes       yes
-openai    gpt-4o                                      128K     16.4K    no        yes
-openai    gpt-4o                                      128K     16.4K    no        yes
-`
-	models := parsePiModels(input)
-	if len(models) != 5 {
-		t.Fatalf("expected 5 models (header skipped, duplicate deduped), got %d: %+v", len(models), models)
-	}
-	if models[0].ID != "doubao/glm-4.7" {
-		t.Errorf("unexpected first model: %+v", models[0])
-	}
-	if models[0].Provider != "doubao" {
-		t.Errorf("expected provider doubao, got %q", models[0].Provider)
-	}
-	if models[2].ID != "glm/glm-5.1" {
-		t.Errorf("unexpected third model: %+v", models[2])
-	}
-	if models[4].ID != "openai/gpt-4o" {
-		t.Errorf("unexpected last model: %+v", models[4])
-	}
-}
-
-func TestParsePiModelsLegacyColonFormat(t *testing.T) {
-	// Legacy "provider:model" format — kept for backward compatibility
-	// in case pi's output format changes in the future.
-	input := `openai:gpt-4o
-anthropic:claude-opus-4-7
-openai:gpt-4o
-bareword
-`
-	models := parsePiModels(input)
-	if len(models) != 2 {
-		t.Fatalf("expected 2 models, got %d: %+v", len(models), models)
-	}
-	if models[0].ID != "openai/gpt-4o" {
-		t.Errorf("expected colon normalized to slash: %+v", models[0])
-	}
-}
-
 func TestParseOpenCodeModelsVerboseVariants(t *testing.T) {
 	input := `openai/gpt-5
 {
@@ -690,7 +644,7 @@ func TestCachedDiscoveryDoesNotCacheEmpty(t *testing.T) {
 	}
 }
 
-func TestParsePiModelsRejectsBarewords(t *testing.T) {
+func TestParsePiModels(t *testing.T) {
 	input := `openai:gpt-4o
 anthropic:claude-opus-4-7
 openai:gpt-4o
@@ -705,10 +659,32 @@ bareword
 	}
 }
 
-func TestParsePiModelsEmpty(t *testing.T) {
-	models := parsePiModels("")
-	if len(models) != 0 {
-		t.Errorf("expected 0 models for empty input, got %d", len(models))
+func TestParsePiModelsTableFormat(t *testing.T) {
+	input := `provider             model                   context  max-out  thinking  images
+bailian-coding-plan  glm-4.7                 202.8K   16.4K    no        no
+bailian-coding-plan  qwen3.6-plus            1M       65.5K    no        yes
+opencode             claude-sonnet-4-6       1M       64K      yes       yes
+opencode             claude-sonnet-4-6:exp   1M       64K      yes       yes
+opencode             claude-sonnet-4-6       1M       64K      yes       yes
+bareword-only-line
+`
+	models := parsePiModels(input)
+	if len(models) != 4 {
+		t.Fatalf("expected 4 models (header skipped, duplicate deduped, bareword skipped), got %d: %+v", len(models), models)
+	}
+	if models[0].ID != "bailian-coding-plan/glm-4.7" || models[0].Provider != "bailian-coding-plan" {
+		t.Errorf("unexpected first model: %+v", models[0])
+	}
+	if models[1].ID != "bailian-coding-plan/qwen3.6-plus" || models[1].Provider != "bailian-coding-plan" {
+		t.Errorf("unexpected second model: %+v", models[1])
+	}
+	if models[2].ID != "opencode/claude-sonnet-4-6" || models[2].Provider != "opencode" {
+		t.Errorf("unexpected third model: %+v", models[2])
+	}
+	// Colon inside a model name in column 1 must be preserved — only
+	// the legacy `provider:model` form gets colon→slash normalization.
+	if models[3].ID != "opencode/claude-sonnet-4-6:exp" || models[3].Provider != "opencode" {
+		t.Errorf("expected ':' inside table-format model name to be preserved: %+v", models[3])
 	}
 }
 

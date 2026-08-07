@@ -4015,12 +4015,9 @@ func (s *TaskService) FailTask(ctx context.Context, taskID pgtype.UUID, errMsg, 
 // that did download is already cached on disk — a retry resumes from there
 // instead of re-fetching the whole set (MUL-5370).
 var retryableReasons = map[string]bool{
-	"agent_empty_completion":    true,
-	"agent_no_delivery":         true,
 	"runtime_offline":           true,
 	"runtime_recovery":          true,
 	"timeout":                   true,
-	"provider_capacity":         true,
 	"codex_semantic_inactivity": true,
 	string(taskfailure.ReasonAgentProviderNetwork):   true,
 	string(taskfailure.ReasonSkillBundleUnavailable): true,

@@ -1,11 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, ArrowRight, Terminal } from "lucide-react";
-import {
-  captureEvent,
-  setPersonProperties,
-} from "@multica/core/analytics";
+import { useEffect, useState, type ReactNode } from "react";
+import { ArrowRight, Download, Loader2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
   Dialog,
@@ -30,17 +26,20 @@ import { useRuntimePicker } from "../components/use-runtime-picker";
 import { useT } from "../../i18n";
 
 /**
- * Step 3 on **web**. The user is in a browser, so we can't scan their
- * machine for runtimes until they install and start the CLI daemon.
- * This screen is a fan-out: two clearly clickable cards, each with
+ * Step 3 on **web**. The user is in a browser and hasn't downloaded
+ * the desktop app yet, so we can't scan their machine for runtimes.
+ * This screen is a fan-out: three clearly clickable cards, each with
  * an explicit right-side button that says what clicking does:
  *
- *   1. **Install the CLI** — primary card, black bg, "Show steps" pill → opens a
+ *   1. **Download desktop** — primary card, black bg, "Download" pill.
+ *      Opens the installer in a new tab; the user finishes onboarding
+ *      inside the desktop app.
+ *   2. **Install the CLI** — alt card, "Show steps" pill → opens a
  *      dialog containing the real install instructions + live runtime
  *      probe. When a runtime appears and the user selects it, the
  *      dialog's "Connect & continue" button fires `onNext(runtime)`
  *      and advances the flow.
- *   2. **Cloud computer** — alt card, "Coming soon" badge. Not yet
+ *   3. **Cloud computer** — alt card, "Coming soon" badge. Not yet
  *      available; rendered as a static, non-actionable preview.
  *
  * Footer is simplified — no Continue button, since the CLI dialog
@@ -48,6 +47,12 @@ import { useT } from "../../i18n";
  */
 
 type DialogState = "cli" | null;
+
+// Single canonical download destination — the /download page owns
+// OS + arch detection, the All-Platforms matrix, release-note links,
+// and the CLI / Cloud alternates. Kept in sync with landing-hero.tsx
+// and landing footer nav, both of which target the same path.
+const DOWNLOAD_PAGE_URL = "/download";
 
 export function StepPlatformFork({
   wsId,
@@ -67,8 +72,19 @@ export function StepPlatformFork({
   const { t } = useT("onboarding");
 
   const [dialog, setDialog] = useState<DialogState>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [model, setModel] = useState("");
 
   const picker = useRuntimePicker(wsId, wsSlug);
+
+  const pickDesktop = () => {
+    // No post-click state. `noopener` makes window.open return null by spec
+    // whether it opened or was blocked, so this cannot know which happened —
+    // and the copy it used to flip to ("Opened in a new tab.") was a claim we
+    // had no way to stand behind. The card states the intent up front
+    // instead, which is true either way.
+    window.open(DOWNLOAD_PAGE_URL, "_blank", "noopener,noreferrer");
+  };
 
   const handleOpenCli = () => {
     setDialog("cli");
@@ -108,39 +124,14 @@ export function StepPlatformFork({
             onAction={handleOpenCli}
           />
 
-            <div className="mt-10 flex max-w-[560px] flex-col gap-3.5">
-              <ForkPrimary
-                title={t(($) => $.step_platform.cli_title)}
-                subtitle={t(($) => $.step_platform.cli_subtitle)}
-                actionLabel={t(($) => $.step_platform.cli_action)}
-                onAction={handleOpenCli}
-              />
+          <ForkAlt
+            title={t(($) => $.step_platform.cloud_title)}
+            subtitle={t(($) => $.step_platform.cloud_subtitle)}
+            actionLabel={t(($) => $.step_platform.cloud_action)}
+            disabled
+          />
+        </div>
 
-              <ForkAlt
-                title={t(($) => $.step_platform.cloud_title)}
-                subtitle={t(($) => $.step_platform.cloud_subtitle)}
-                actionLabel={t(($) => $.step_platform.cloud_action)}
-                disabled
-              />
-            </div>
-
-            {/* Inline action bar — hint on the left, Skip on the right.
-                Advancement for the CLI path is owned by the CLI
-                dialog's own "Connect & continue" button; Skip creates
-                the single self-serve onboarding issue. */}
-            <div className="mt-8 flex max-w-[560px] flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              <span
-                aria-live="polite"
-                className="text-caption text-muted-foreground"
-              >
-                {footerHint}
-              </span>
-              <Button variant="secondary" onClick={() => onNext(null)}>
-                {t(($) => $.step_runtime.skip)}
-              </Button>
-            </div>
-          </div>
-        </main>
       </div>
 
       {/* Advancement for the CLI path is owned by the CLI dialog's own
@@ -184,41 +175,31 @@ export function StepPlatformFork({
 // Fork cards
 // ------------------------------------------------------------
 
-function ForkPrimary({
-  title,
-  subtitle,
-  actionLabel,
-  onAction,
-}: {
-  title: string;
-  subtitle: ReactNode;
-  actionLabel: ReactNode;
-  onAction: () => void;
-}) {
+function ForkPrimary({ onClick }: { onClick: () => void }) {
+  const { t } = useT("onboarding");
   return (
     <button
       type="button"
-      onClick={onAction}
-      aria-label={`${title}: ${actionLabel}`}
+      onClick={onClick}
       className={cn(
         "group flex items-center justify-between gap-4 rounded-xl bg-foreground px-6 py-5 text-left text-background transition-transform",
         "hover:-translate-y-0.5",
       )}
     >
       <div className="min-w-0">
-        <div className="flex items-center gap-2 text-[17px] font-medium tracking-tight">
-          <Terminal className="h-4 w-4" aria-hidden />
-          {title}
+        <div className="flex items-center gap-2 text-title font-medium tracking-tight">
+          <Download className="h-4 w-4" aria-hidden />
+          {t(($) => $.step_platform.download_title)}
         </div>
-        <div className="mt-1 text-[13px] text-background/60">
-          {subtitle}
+        <div className="mt-1 text-label text-background/60">
+          {t(($) => $.step_platform.download_subtitle)}
         </div>
       </div>
       <span
         aria-hidden
         className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-background/10 px-4 py-2 text-label font-medium transition-colors group-hover:bg-background/20"
       >
-        {actionLabel}
+        {t(($) => $.step_platform.download_button)}
         <ArrowRight className="h-3.5 w-3.5" />
       </span>
     </button>
@@ -402,7 +383,8 @@ function formatElapsed(seconds: number) {
  *      crosses thresholds — so a user who stalls mid-setup gets
  *      useful guidance without being dogpiled at t=0.
  *   3. At the 90s+ "stalled" tier, point the user at alternate paths
- *      (Skip / Cloud waitlist) without sending them to the desktop app.
+ *      (Skip / Cloud waitlist) — parallels desktop's EmptyView, which
+ *      already exposes the same two exits when no runtime registers.
  *
  * Elapsed-time counter only ticks while the dialog is open so reopen
  * after closing resets the staging.

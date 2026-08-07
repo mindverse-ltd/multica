@@ -30,6 +30,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
+	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 // ---------------------------------------------------------------------------
@@ -3018,7 +3019,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	currentTask, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
 		return
 	}
@@ -3029,18 +3030,30 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.shouldRetryUndeliveredIssueCompletion(r.Context(), currentTask) {
-		failed, err := h.TaskService.FailTask(r.Context(), parseUUID(taskID), "agent completed without posting a result comment; retrying", req.SessionID, req.WorkDir, "agent_no_delivery", false, "")
-		if err != nil {
-			slog.Warn("undelivered completion retry failed", "task_id", taskID, "error", err)
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), failed.ID); err != nil {
-			slog.Warn("undelivered completion retry: failed to revoke task token", "task_id", uuidToString(failed.ID), "error", err)
-		}
-		slog.Warn("undelivered completion reclassified for retry", "task_id", taskID, "agent_id", uuidToString(currentTask.AgentID))
-		writeJSON(w, http.StatusOK, taskToResponse(*failed, workspaceID))
+	// GH #6402: a daemon whose backend does not (yet) read the provider's
+	// structured terminal reason reports a context-exhausted run as a clean
+	// success, with the CLI's "your context window is full" notice as the
+	// answer. Re-route it to the failure path here so the fix does not have to
+	// wait for every installed daemon to update: an un-upgraded host would
+	// otherwise keep publishing that notice as the agent's reply AND keep the
+	// dead session pinned as the resume pointer, which is a permanently stuck
+	// (agent, issue) pair rather than a mislabelled row. Same argument, and the
+	// same shared classifier, as taskfailure.NormalizeDaemonReason on the fail
+	// boundary (MUL-5370). A current daemon classifies this before it ever calls
+	// /complete, so this branch is dead weight for it — by design.
+	if taskfailure.ContextExhaustedCompletion(req.Output) {
+		slog.Warn("complete task: output is a provider context-exhaustion notice, recording as failed",
+			"task_id", taskID,
+			"failure_reason", taskfailure.ReasonAgentContextOverflow,
+		)
+		h.failTask(w, r, taskID, workspaceID, TaskFailRequest{
+			Error:                 req.Output,
+			FailureReason:         string(taskfailure.ReasonAgentContextOverflow),
+			SessionID:             req.SessionID,
+			WorkDir:               req.WorkDir,
+			SessionRolloutMissing: req.SessionRolloutMissing,
+			RetiredSessionID:      req.RetiredSessionID,
+		})
 		return
 	}
 
@@ -3087,32 +3100,6 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("task completed", "task_id", taskID, "agent_id", uuidToString(task.AgentID))
 	writeJSON(w, http.StatusOK, taskToResponse(*task, workspaceID))
-}
-
-func (h *Handler) shouldRetryUndeliveredIssueCompletion(ctx context.Context, task db.AgentTaskQueue) bool {
-	if !task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid || !task.StartedAt.Valid {
-		return false
-	}
-
-	noAction, err := service.HasSquadLeaderNoActionEvaluationForTask(ctx, h.Queries, task)
-	if err != nil {
-		slog.Warn("undelivered completion: no-action delivery check failed", "task_id", uuidToString(task.ID), "error", err)
-		return false
-	}
-	if noAction {
-		return false
-	}
-
-	commented, err := h.Queries.HasAgentCommentedSince(ctx, db.HasAgentCommentedSinceParams{
-		IssueID:  task.IssueID,
-		AuthorID: task.AgentID,
-		Since:    task.StartedAt,
-	})
-	if err != nil {
-		slog.Warn("undelivered completion: comment delivery check failed", "task_id", uuidToString(task.ID), "error", err)
-		return false
-	}
-	return !commented
 }
 
 // emitIssueExecutedOnFirstCompletion atomically flips issue.first_executed_at

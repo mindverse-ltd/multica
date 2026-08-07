@@ -23,8 +23,7 @@ import { CliInstallInstructions, OnboardingFlow } from "@multica/views/onboardin
  *
  * `CliInstallInstructions` is passed in as the `runtimeInstructions`
  * slot so the flow can render it inside the CLI dialog. The commands it
- * shows are pinned to this self-hosted deployment so the CLI connects
- * back to the same Multica instance the user is onboarding into.
+ * shows are hardcoded — nothing environmental to thread through.
  */
 export default function OnboardingPage() {
   const router = useRouter();
@@ -88,12 +87,7 @@ export default function OnboardingPage() {
             router.push(paths.root());
           }
         }}
-        runtimeInstructions={
-          <CliInstallInstructions
-            appUrl="https://multica.macaron.xin"
-            serverUrl="https://multica.macaron.xin"
-          />
-        }
+        runtimeInstructions={<CliInstallInstructions />}
       />
     </div>
   );
