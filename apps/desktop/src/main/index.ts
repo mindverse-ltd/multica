@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, Notification, screen } from "electron";
 import { homedir } from "os";
 import { join } from "path";
 import { pathToFileURL } from "url";
@@ -25,11 +25,20 @@ import {
   installRendererRecoveryHandlers,
   type RendererRecoveryWindow,
 } from "./renderer-recovery";
+import { createBestEffortDevLog } from "./dev-log";
 import {
   writeFreezeBreadcrumb,
-  readAndClearFreezeBreadcrumb,
+  readFreezeBreadcrumb,
+  ackFreezeBreadcrumb,
   clearFreezeBreadcrumb,
 } from "./freeze-breadcrumb";
+import {
+  loadWindowState,
+  resolveWindowOptions,
+  saveWindowStateToFile,
+  snapshotWindowState,
+  windowStateFilePath,
+} from "./window-state";
 import {
   encodeIssueWindowArgument,
   parseIssueWindowRequest,
@@ -108,6 +117,7 @@ if (process.platform !== "win32") {
 }
 
 const PROTOCOL = "multica";
+const devLog = is.dev ? createBestEffortDevLog() : undefined;
 
 // Where the main process parks a freeze/crash breadcrumb until the next
 // renderer boot flushes it to telemetry. Lives in userData so it survives a
@@ -132,6 +142,7 @@ const rendererRouteContexts = new WeakMap<
   Electron.WebContents,
   RendererRouteContext
 >();
+
 let runtimeConfigResult: RuntimeConfigResult = {
   ok: false,
   error: { message: "Runtime config has not loaded yet" },
@@ -299,9 +310,23 @@ function createWindow(): BrowserWindow {
   lastKnownSystemLocale = systemLocale;
 
   mainRendererMessages.resetReady();
+
+  // Restore prior size/position/maximized/fullscreen (#5244), constraining
+  // bounds to the work area of the display the window will land on.
+  const stateFile = windowStateFilePath(app.getPath("userData"));
+  const savedWindowState = loadWindowState(stateFile);
+  const windowOpts = resolveWindowOptions(
+    savedWindowState,
+    screen.getAllDisplays().map((d) => d.workArea),
+    screen.getPrimaryDisplay().workArea,
+  );
+
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: windowOpts.width,
+    height: windowOpts.height,
+    ...(windowOpts.x != null && windowOpts.y != null
+      ? { x: windowOpts.x, y: windowOpts.y }
+      : {}),
     minWidth: 900,
     minHeight: 600,
     titleBarStyle: "hiddenInset",
@@ -319,6 +344,25 @@ function createWindow(): BrowserWindow {
     webPreferences: createRendererWebPreferences(systemLocale),
   });
   const window = mainWindow;
+
+  // Persist bounds on resize/move (debounced) and on close so the next
+  // launch restores size/position and max/fullscreen flags. getNormalBounds
+  // is used so maximized/fullscreen still saves the restore size.
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+  const persistWindowState = () => {
+    const snap = snapshotWindowState(window);
+    if (snap) saveWindowStateToFile(stateFile, snap);
+  };
+  const schedulePersistWindowState = () => {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(persistWindowState, 400);
+  };
+  window.on("resize", schedulePersistWindowState);
+  window.on("move", schedulePersistWindowState);
+  window.on("close", () => {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistWindowState();
+  });
 
   window.on("closed", () => {
     if (mainWindow === window) {
@@ -338,6 +382,12 @@ function createWindow(): BrowserWindow {
   );
 
   window.on("ready-to-show", () => {
+    // Restore max/fullscreen after normal bounds are applied.
+    if (windowOpts.isFullScreen) {
+      window.setFullScreen(true);
+    } else if (windowOpts.isMaximized) {
+      window.maximize();
+    }
     window.show();
   });
 
@@ -357,23 +407,20 @@ function createWindow(): BrowserWindow {
   // Dev-mode renderer diagnostics. When the renderer crashes hard enough
   // that DevTools can't be opened (white screen with no clickable surface),
   // the only way to recover the actual JS error is to forward it from the
-  // main process to the terminal running `make dev`. Without these, the
+  // main process to the dev launcher log. Without these, the
   // user sees only the daemon-manager polling noise (`Render frame was
   // disposed before WebFrameMain could be accessed`) which is a downstream
   // symptom, not the cause.
   //
-  // Gated by `is.dev` to keep production stderr clean — packaged builds
-  // don't have a terminal anyway, and we ship to crash-reporting separately.
-  if (is.dev) {
-    const log = (tag: string, ...args: unknown[]) =>
-      process.stderr.write(`[renderer ${tag}] ${args.map(String).join(" ")}\n`);
-
+  // Gated by `is.dev` to keep production logs clean — packaged builds ship
+  // failures to crash-reporting separately.
+  if (devLog) {
     // Forward every renderer-side console.* call. The detail object also
     // carries source URL + line — included so a thrown stack trace from
     // window.onerror is traceable back to a file.
     window.webContents.on("console-message", (details) => {
       const { level, message, sourceId, lineNumber } = details;
-      log(level, `${message} (${sourceId}:${lineNumber})`);
+      devLog(level, `${message} (${sourceId}:${lineNumber})`);
     });
 
     // Fires when loadURL / loadFile can't reach its target (dev server
@@ -383,13 +430,12 @@ function createWindow(): BrowserWindow {
       "did-fail-load",
       (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
         if (errorCode === -3) return;
-        log(
+        devLog(
           "did-fail-load",
           `code=${errorCode} desc=${errorDescription} url=${validatedURL} mainFrame=${isMainFrame}`,
         );
       },
     );
-
   }
 
   installRendererRecoveryHandlers(window as unknown as RendererRecoveryWindow, {
@@ -398,11 +444,11 @@ function createWindow(): BrowserWindow {
       dialog.showMessageBox(window, options),
     ),
     getDiagnosticContext: () => {
+      // No `windowUrl`: it is an absolute install path (`/Users/<name>/...`
+      // when installed per-user) and the bucketed route below already says
+      // which page the window was on, which is the part we can act on.
       const routeContext = rendererRouteContexts.get(window.webContents);
-      return {
-        windowUrl: window.webContents.getURL(),
-        ...(routeContext ? { desktopRoute: routeContext } : {}),
-      };
+      return routeContext ? { desktopRoute: routeContext } : {};
     },
     // Only persist in production: a true hang/crash can't report itself, so we
     // write a breadcrumb and the next renderer boot flushes it to PostHog. Dev
@@ -421,6 +467,7 @@ function createWindow(): BrowserWindow {
       ? undefined
       : () =>
           clearFreezeBreadcrumb(freezeBreadcrumbPath(), `main:${window.id}`),
+    log: devLog,
   });
 
   installContextMenu(window.webContents);
@@ -483,11 +530,11 @@ function createIssueWindow(context: IssueWindowContext): void {
       dialog.showMessageBox(window, options),
     ),
     getDiagnosticContext: () => {
+      // No `windowUrl`: it is an absolute install path (`/Users/<name>/...`
+      // when installed per-user) and the bucketed route below already says
+      // which page the window was on, which is the part we can act on.
       const routeContext = rendererRouteContexts.get(window.webContents);
-      return {
-        windowUrl: window.webContents.getURL(),
-        ...(routeContext ? { desktopRoute: routeContext } : {}),
-      };
+      return routeContext ? { desktopRoute: routeContext } : {};
     },
     persistBreadcrumb: is.dev
       ? undefined
@@ -503,6 +550,7 @@ function createIssueWindow(context: IssueWindowContext): void {
       ? undefined
       : () =>
           clearFreezeBreadcrumb(freezeBreadcrumbPath(), `issue:${window.id}`),
+    log: devLog,
   });
 
   installContextMenu(window.webContents);
@@ -668,7 +716,16 @@ if (!gotTheLock) {
     // reported when it happened — the renderer was hung or gone). Read-and-
     // clear so a failure reports exactly once.
     ipcMain.on("freeze:get-last", (event) => {
-      event.returnValue = readAndClearFreezeBreadcrumb(freezeBreadcrumbPath());
+      event.returnValue = readFreezeBreadcrumb(freezeBreadcrumbPath());
+    });
+
+    // The renderer got its breadcrumb event to posthog — retire that exact
+    // payload. A newer failure recorded since the read keeps its own ts and
+    // survives to be reported on the next boot.
+    ipcMain.on("freeze:ack", (event, ts: unknown) => {
+      if (!BrowserWindow.fromWebContents(event.sender)) return;
+      if (typeof ts !== "number" || !Number.isFinite(ts)) return;
+      ackFreezeBreadcrumb(freezeBreadcrumbPath(), ts);
     });
 
     // Sync IPC: preload exposes the validated runtime config before renderer
