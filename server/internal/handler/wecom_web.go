@@ -8,6 +8,7 @@ package handler
 // WebSocket long connection, so a public callback URL is not required.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -15,11 +16,27 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/integrations/wecom"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
+
+// wecomBodyLimit caps what either WeCom JSON endpoint will read. Both bodies
+// are a handful of short fields, and encoding/json materializes a string value
+// whole before Decode returns — so without a ceiling, one authenticated caller
+// POSTing a multi-gigabyte token string costs the API server that much RSS per
+// request.
+const wecomBodyLimit = 16 * 1024
+
+// WecomBindingRedeemer is the slice of wecom.BindingTokenService the redeem
+// endpoint drives. *wecom.BindingTokenService is the production value; the
+// interface exists so the body ceiling can be pinned in a test without a live
+// channel_binding_token table.
+type WecomBindingRedeemer interface {
+	RedeemAndBind(ctx context.Context, raw string, multicaUserID pgtype.UUID) (wecom.RedeemedBindingToken, error)
+}
 
 // WecomInstallationResponse is the wire shape for a wecom installation
 // row. The secret is NEVER included — it remains sealed on the row. BotID
@@ -140,6 +157,7 @@ func (h *Handler) RegisterWecomBYO(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body RegisterWecomBYORequest
+	r.Body = http.MaxBytesReader(w, r.Body, wecomBodyLimit)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -168,6 +186,19 @@ func (h *Handler) RegisterWecomBYO(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, "this bot is connected to an archived agent in this workspace — restore that agent, or disconnect its bot, before connecting it here")
 		case errors.Is(err, wecom.ErrBotOwnedByAnotherWorkspace):
 			writeError(w, http.StatusConflict, "this bot is already connected to a different Multica workspace — disconnect it there before connecting it here")
+		case errors.Is(err, wecom.ErrCredentialsRejected):
+			// WeCom itself refused the pair. This is the one branch entitled
+			// to blame the credentials, and the only one the admin can act on
+			// by going back to the console.
+			writeError(w, http.StatusBadRequest, "WeCom rejected this Bot ID and secret — check both on the WeCom admin console, and that the bot is a smart bot with the long connection enabled")
+		case errors.Is(err, wecom.ErrCredentialsUnverifiable):
+			// The deployment could not reach WeCom. Reporting this as a bad
+			// credential sends the admin to rotate a secret that was fine —
+			// and a rotated WeCom secret cannot be recovered. 503: nothing is
+			// wrong with the input, the check could not be made.
+			slog.Warn("wecom install could not verify the bot",
+				"error", err, "workspace_id", uuidToString(wsUUID), "agent_id", uuidToString(agentUUID))
+			writeError(w, http.StatusServiceUnavailable, "could not reach WeCom to verify this bot — the credentials were not changed; try again in a moment")
 		default:
 			slog.Warn("wecom install failed",
 				"error", err, "workspace_id", uuidToString(wsUUID), "agent_id", uuidToString(agentUUID))
@@ -239,7 +270,16 @@ func (h *Handler) wecomInstallService() *wecom.InstallationService {
 	if !ok || res == nil || res.Box == nil {
 		return nil
 	}
-	svc, err := wecom.NewInstallationService(h.Queries, h.TxStarter, res.Box)
+	// The probe is what makes the reclaim inside Upsert safe to run against a
+	// row this caller may not own. h.WecomCredentialProbe is a test seam;
+	// production leaves it nil and NewInstallationService supplies the real
+	// handshake. There is no wiring that leaves the check off — a nil probe is
+	// a construction error there, not a fail-open mode.
+	var opts []wecom.InstallationOption
+	if h.WecomCredentialProbe != nil {
+		opts = append(opts, wecom.WithCredentialProbe(h.WecomCredentialProbe))
+	}
+	svc, err := wecom.NewInstallationService(h.Queries, h.TxStarter, res.Box, opts...)
 	if err != nil {
 		return nil
 	}
@@ -279,6 +319,7 @@ func (h *Handler) RedeemWecomBindingToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 	var req RedeemWecomBindingTokenRequest
+	r.Body = http.MaxBytesReader(w, r.Body, wecomBodyLimit)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
