@@ -250,6 +250,33 @@ func (s *ChannelStore) GetLarkUserBindingByOpenID(ctx context.Context, arg GetUs
 	return userBindingFromRow(row)
 }
 
+// ListUserBindingsByMulticaUser returns every Feishu binding the user has
+// across all installations in the workspace. Used by the inbox→Feishu DM
+// fan-out: each installation is a separate Lark app and only that app can
+// DM its own bound open_id, so a user bound to two bots gets two bindings
+// (and the caller sends one DM per binding). Callers MUST re-check the
+// installation's status before sending — this query deliberately does not
+// filter on installation status so revoked installations are pruned by the
+// caller (which already loads each installation to decrypt the secret).
+func (s *ChannelStore) ListUserBindingsByMulticaUser(ctx context.Context, workspaceID, multicaUserID pgtype.UUID) ([]UserBinding, error) {
+	rows, err := s.Queries.ListChannelUserBindingsByMulticaUser(ctx, db.ListChannelUserBindingsByMulticaUserParams{
+		WorkspaceID:   workspaceID,
+		MulticaUserID: multicaUserID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UserBinding, 0, len(rows))
+	for _, row := range rows {
+		b, err := userBindingFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
 func (s *ChannelStore) CreateLarkUserBinding(ctx context.Context, arg CreateUserBindingParams) (UserBinding, error) {
 	cfg, err := encodeBindingConfig(UserBinding{UnionID: arg.UnionID})
 	if err != nil {

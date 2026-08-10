@@ -371,6 +371,24 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				patcher := lark.NewPatcher(cs, installSvc, larkClient, lark.PatcherConfig{})
 				patcher.Register(bus)
 
+				// Inbox DM notifier: fans inbox:new out to a Feishu DM via
+				// each installation the recipient has bound. Gated on
+				// IsConfigured() so pre-outbound deployments pay zero
+				// cost — the stub client would refuse every send anyway.
+				// Sibling to the WS inbox subscriber in listeners.go;
+				// both run on the same bus independently.
+				if larkClient.IsConfigured() {
+					if inboxDM := lark.NewInboxDMNotifier(lark.InboxDMNotifierConfig{
+						Queries:     cs,
+						Credentials: installSvc,
+						Client:      larkClient,
+						AppURL:      appURLFromEnv(),
+						Logger:      slog.Default(),
+					}); inboxDM != nil {
+						inboxDM.Register(bus)
+					}
+				}
+
 				// Typing indicator: shows a "processing" reaction on the user's
 				// message while the agent is working, then removes it before the
 				// reply is sent. Best-effort; failures are logged only.

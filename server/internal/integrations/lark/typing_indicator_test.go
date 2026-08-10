@@ -47,6 +47,9 @@ func (f *fakeTypingAPIClient) SendMarkdownCard(context.Context, SendMarkdownCard
 func (f *fakeTypingAPIClient) SendBindingPromptCard(context.Context, BindingPromptParams) error {
 	return nil
 }
+func (f *fakeTypingAPIClient) SendDirectMessage(context.Context, DirectMessageParams) error {
+	return nil
+}
 func (f *fakeTypingAPIClient) GetBotInfo(context.Context, InstallationCredentials) (BotInfo, error) {
 	return BotInfo{}, nil
 }

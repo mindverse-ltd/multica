@@ -88,6 +88,7 @@ type fakeAPIClient struct {
 	mdCardErr      error
 	mdCardReturn   string
 	bindingSent    []BindingPromptParams
+	dmSent         []DirectMessageParams
 	// threadReplyErr, when non-nil, is returned by the three send
 	// methods whenever the call carries a thread ReplyTarget, while the
 	// attempt is still recorded. Tests inject either a classified
@@ -144,6 +145,12 @@ func (f *fakeAPIClient) SendBindingPromptCard(ctx context.Context, p BindingProm
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.bindingSent = append(f.bindingSent, p)
+	return nil
+}
+func (f *fakeAPIClient) SendDirectMessage(ctx context.Context, p DirectMessageParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dmSent = append(f.dmSent, p)
 	return nil
 }
 func (f *fakeAPIClient) GetBotInfo(ctx context.Context, creds InstallationCredentials) (BotInfo, error) {

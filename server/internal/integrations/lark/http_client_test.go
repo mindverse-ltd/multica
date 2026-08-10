@@ -1121,6 +1121,71 @@ func TestHTTPClient_TokenEndpointError(t *testing.T) {
 	}
 }
 
+func TestHTTPClient_SendDirectMessage_HappyPath(t *testing.T) {
+	fake := newLarkFake(t)
+	fake.stubToken("tok_dm", 7200)
+
+	var capturedBody map[string]string
+	fake.mux.HandleFunc("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		fake.bindN.Add(1)
+		_ = json.NewDecoder(r.Body).Decode(&capturedBody)
+		if got := r.URL.Query().Get("receive_id_type"); got != "open_id" {
+			t.Errorf("receive_id_type: got %q want open_id", got)
+		}
+		writeJSON(w, map[string]any{"code": 0, "data": map[string]string{"message_id": "om_dm"}})
+	})
+
+	c := newTestClient(fake, time.Now)
+	if err := c.SendDirectMessage(context.Background(), DirectMessageParams{
+		InstallationID: testCreds(),
+		OpenID:         OpenID("ou_user_dm"),
+		Text:           "[MAC-1] hello\nhttps://multica.test/issues/abc",
+	}); err != nil {
+		t.Fatalf("send direct message: %v", err)
+	}
+	if capturedBody["receive_id"] != "ou_user_dm" {
+		t.Errorf("receive_id: got %q", capturedBody["receive_id"])
+	}
+	if capturedBody["msg_type"] != "text" {
+		t.Errorf("msg_type: got %q want text", capturedBody["msg_type"])
+	}
+	if !strings.Contains(capturedBody["content"], "hello") {
+		t.Errorf("content should embed text verbatim: %q", capturedBody["content"])
+	}
+	if !strings.Contains(capturedBody["content"], "multica.test/issues/abc") {
+		t.Errorf("content should embed the URL: %q", capturedBody["content"])
+	}
+}
+
+func TestHTTPClient_SendDirectMessage_LarkErrorCode(t *testing.T) {
+	fake := newLarkFake(t)
+	fake.stubToken("tok_dm_e", 7200)
+	fake.mux.HandleFunc("/open-apis/im/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"code": 230002, "msg": "user not found"})
+	})
+	c := newTestClient(fake, time.Now)
+	err := c.SendDirectMessage(context.Background(), DirectMessageParams{
+		InstallationID: testCreds(),
+		OpenID:         OpenID("ou_user_missing"),
+		Text:           "hi",
+	})
+	if err == nil || !strings.Contains(err.Error(), "code=230002") {
+		t.Errorf("want code=230002 surfaced, got %v", err)
+	}
+}
+
+func TestHTTPClient_SendDirectMessage_MissingOpenID(t *testing.T) {
+	fake := newLarkFake(t)
+	c := newTestClient(fake, time.Now)
+	err := c.SendDirectMessage(context.Background(), DirectMessageParams{
+		InstallationID: testCreds(),
+		Text:           "hi",
+	})
+	if err == nil || !strings.Contains(err.Error(), "missing open_id") {
+		t.Errorf("want missing open_id error, got %v", err)
+	}
+}
+
 func TestHTTPClient_AddMessageReaction_HappyPath(t *testing.T) {
 	fake := newLarkFake(t)
 	fake.stubToken("tok_react", 7200)

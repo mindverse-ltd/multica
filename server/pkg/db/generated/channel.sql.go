@@ -1395,6 +1395,53 @@ func (q *Queries) ListChannelInstallationsByWorkspace(ctx context.Context, arg L
 	return items, nil
 }
 
+const listChannelUserBindingsByMulticaUser = `-- name: ListChannelUserBindingsByMulticaUser :many
+SELECT id, workspace_id, multica_user_id, installation_id, channel_type, channel_user_id, config, bound_at FROM channel_user_binding
+WHERE workspace_id = $1
+  AND multica_user_id = $2
+  AND channel_type = 'feishu'
+`
+
+type ListChannelUserBindingsByMulticaUserParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	MulticaUserID pgtype.UUID `json:"multica_user_id"`
+}
+
+// Outbound identity lookup: which channel_user_ids (Feishu open_ids) does
+// this Multica user have, across all installations in a workspace? Used by
+// the inbox→Feishu DM fan-out. Unlike FindChannelBindingForMember, this
+// returns every binding (one DM per bot), because each installation is a
+// separate Lark app and only that app can DM its own bound open_id.
+// Callers must re-check installation status before sending.
+func (q *Queries) ListChannelUserBindingsByMulticaUser(ctx context.Context, arg ListChannelUserBindingsByMulticaUserParams) ([]ChannelUserBinding, error) {
+	rows, err := q.db.Query(ctx, listChannelUserBindingsByMulticaUser, arg.WorkspaceID, arg.MulticaUserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelUserBinding{}
+	for rows.Next() {
+		var i ChannelUserBinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.MulticaUserID,
+			&i.InstallationID,
+			&i.ChannelType,
+			&i.ChannelUserID,
+			&i.Config,
+			&i.BoundAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockChannelChatSessionPendingFresh = `-- name: LockChannelChatSessionPendingFresh :one
 SELECT pending_fresh FROM channel_chat_session_binding
 WHERE chat_session_id = $1
