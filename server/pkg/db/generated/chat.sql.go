@@ -975,38 +975,6 @@ func (q *Queries) GetLatestAssistantChatMessageForSession(ctx context.Context, c
 	return i, err
 }
 
-const getMostRecentUserChatMessage = `-- name: GetMostRecentUserChatMessage :one
-SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms, message_kind, channel_media_pending_until, channel_ingested, quick_actions FROM chat_message
-WHERE chat_session_id = $1 AND role = 'user'
-ORDER BY created_at DESC
-LIMIT 1
-`
-
-// Returns the most recent role='user' message in a session. Used by the
-// Lark `/issue` command parser: when the user types `/issue` with no
-// title, the spec falls back to "use the previous user message as the
-// title". Bot replies (role='assistant') are excluded — only human
-// input qualifies as a fallback title source.
-func (q *Queries) GetMostRecentUserChatMessage(ctx context.Context, chatSessionID pgtype.UUID) (ChatMessage, error) {
-	row := q.db.QueryRow(ctx, getMostRecentUserChatMessage, chatSessionID)
-	var i ChatMessage
-	err := row.Scan(
-		&i.ID,
-		&i.ChatSessionID,
-		&i.Role,
-		&i.Content,
-		&i.TaskID,
-		&i.CreatedAt,
-		&i.FailureReason,
-		&i.ElapsedMs,
-		&i.MessageKind,
-		&i.ChannelMediaPendingUntil,
-		&i.ChannelIngested,
-		&i.QuickActions,
-	)
-	return i, err
-}
-
 const getOldestActiveChatSessionForCreatorAgent = `-- name: GetOldestActiveChatSessionForCreatorAgent :one
 SELECT id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_read_at, is_agent_intro, pinned_at, project_id FROM chat_session
 WHERE workspace_id = $1
@@ -1254,9 +1222,14 @@ WHERE message.chat_session_id = $2
   AND NOT EXISTS (
       SELECT 1
       FROM chat_message AS prior
+      LEFT JOIN agent_task_queue AS prior_turn
+        ON prior_turn.id = prior.task_id
+      LEFT JOIN agent_task_queue AS prior_batch
+        ON prior_batch.id = COALESCE(prior_turn.chat_input_task_id, prior_turn.id)
       WHERE prior.chat_session_id = $2
         AND prior.role != 'user'
         AND (prior.created_at, prior.id) > (message.created_at, message.id)
+        AND (prior_batch.id IS NULL OR prior_batch.created_at > message.created_at)
   )
 `
 
@@ -1271,6 +1244,23 @@ type LinkUnownedChannelChatMessagesToTaskParams struct {
 // channel_command turns were already handled synchronously by Router. They stay
 // durable for channel orchestration but remain unowned and absent from public
 // Chat projections, preventing both immediate and delayed re-execution.
+//
+// The boundary is "already answered", not "something newer exists". A reply can
+// only be a reply TO this message if the turn that wrote it started AFTER the
+// message arrived; a turn already running when the message landed had sealed
+// its own input batch before the message existed, so its reply — however late
+// it lands — answers an earlier batch and must not become a boundary. Without
+// that qualifier, a predecessor completing inside the debounce window (message
+// at 18:31:17.7, predecessor reply at 18:31:20.2, seal at 18:31:20.7) sealed
+// ZERO rows: the new task owned an empty input batch and the claim path
+// cancelled it, losing the user's message with no reply (GH #6591).
+//
+// The reply's turn is compared through COALESCE(chat_input_task_id, id): an
+// auto-retry clone gets a fresh id while inheriting the root's batch, and it is
+// the ROOT's creation time that says which messages that batch could contain.
+// A non-user row with no task (or whose task row is gone) still counts as a
+// boundary — unattributable output is treated as possibly answering, so the
+// pre-ownership rows of a legacy session are never swept into a new batch.
 func (q *Queries) LinkUnownedChannelChatMessagesToTask(ctx context.Context, arg LinkUnownedChannelChatMessagesToTaskParams) error {
 	_, err := q.db.Exec(ctx, linkUnownedChannelChatMessagesToTask, arg.TaskID, arg.ChatSessionID)
 	return err
@@ -2110,6 +2100,72 @@ FOR UPDATE
 // introduced and none of the three can deadlock against each other.
 func (q *Queries) LockChatSessionForDraftWrite(ctx context.Context, id pgtype.UUID) (ChatSession, error) {
 	row := q.db.QueryRow(ctx, lockChatSessionForDraftWrite, id)
+	var i ChatSession
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AgentID,
+		&i.CreatorID,
+		&i.Title,
+		&i.SessionID,
+		&i.WorkDir,
+		&i.Status,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.UnreadSince,
+		&i.RuntimeID,
+		&i.LastReadAt,
+		&i.IsAgentIntro,
+		&i.PinnedAt,
+		&i.ProjectID,
+	)
+	return i, err
+}
+
+const lockChatSessionForEnqueue = `-- name: LockChatSessionForEnqueue :one
+SELECT id, workspace_id, agent_id, creator_id, title, session_id, work_dir, status, created_at, updated_at, unread_since, runtime_id, last_read_at, is_agent_intro, pinned_at, project_id FROM chat_session
+WHERE id = $1
+FOR NO KEY UPDATE
+`
+
+// The chat-task enqueue's answer to archiving, and the one lock on this row
+// that a concurrent inbound message must NOT wait behind.
+//
+// The channel run trigger is debounced, so the message is persisted the moment
+// it arrives and the task row is created a window later. An archive committing
+// inside that window cancels the tasks it can see — there are none yet — and
+// deletes the channel binding, and the flush then enqueues onto a conversation
+// the user closed. ClaimAgentTask does not read chat_session.status, so the
+// daemon runs it. Taking this lock as the enqueue transaction's first
+// statement and re-reading status under it makes both interleavings safe:
+// enqueue-then-archive is caught by the archive's cancel, archive-then-enqueue
+// is refused here.
+//
+// FOR NO KEY UPDATE, not the FOR UPDATE the delete / runtime-bind / draft locks
+// take, and the difference is the point. Those three want to block concurrent
+// INSERTs that reference this row: FOR UPDATE conflicts with the FOR KEY SHARE
+// an FK insert takes on its parent, which is exactly how LockChatSessionForDelete
+// stops a send from slipping a task in between its cancel and its delete. This
+// lock wants the opposite. Every inbound channel message is an INSERT into
+// chat_message, FK'd to this same row, and the flush it eventually triggers
+// holds this lock for the whole enqueue — under FOR UPDATE the room's next
+// message would block behind the previous message's enqueue. FOR NO KEY UPDATE
+// does not conflict with FOR KEY SHARE, so appends keep flowing, while it still
+// conflicts with FOR UPDATE and with FOR NO KEY UPDATE — which is what
+// SetChatSessionArchived's UPDATE (status is not a key column) and the delete
+// path's lock take. So the archive and the delete still serialise against this
+// enqueue in both directions, which is all this guard needs.
+//
+// Returns the whole row, not just the id, for the same reason
+// LockChatSessionForDraftWrite does: the caller must re-check status INSIDE the
+// transaction, because an enqueue blocked here resumes holding the row it read
+// before blocking — and the archive is what it was blocked on.
+//
+// Same row and same position (first statement) as the other three, so the
+// repo-wide chat_session -> agent_task_queue order is unchanged and no new
+// deadlock edge is introduced.
+func (q *Queries) LockChatSessionForEnqueue(ctx context.Context, id pgtype.UUID) (ChatSession, error) {
+	row := q.db.QueryRow(ctx, lockChatSessionForEnqueue, id)
 	var i ChatSession
 	err := row.Scan(
 		&i.ID,
