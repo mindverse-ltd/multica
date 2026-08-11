@@ -277,6 +277,31 @@ func (s *ChannelStore) ListUserBindingsByMulticaUser(ctx context.Context, worksp
 	return out, nil
 }
 
+// ListUserBindingByAgent returns the Feishu binding(s) whose installation
+// belongs to the specified agent. Used by the actor-gated inbox→Feishu DM
+// path (MAC-12653): instead of fanning out one DM per bound bot, we send
+// a single DM from the bot of the agent that triggered the event. The
+// caller MUST re-check the installation's status before sending.
+func (s *ChannelStore) ListUserBindingByAgent(ctx context.Context, workspaceID, multicaUserID, agentID pgtype.UUID) ([]UserBinding, error) {
+	rows, err := s.Queries.ListChannelUserBindingByAgent(ctx, db.ListChannelUserBindingByAgentParams{
+		WorkspaceID:   workspaceID,
+		MulticaUserID: multicaUserID,
+		AgentID:       agentID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]UserBinding, 0, len(rows))
+	for _, row := range rows {
+		b, err := userBindingFromRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
 func (s *ChannelStore) CreateLarkUserBinding(ctx context.Context, arg CreateUserBindingParams) (UserBinding, error) {
 	cfg, err := encodeBindingConfig(UserBinding{UnionID: arg.UnionID})
 	if err != nil {

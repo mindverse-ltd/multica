@@ -783,87 +783,13 @@ func TestNotification_PriorityChanged(t *testing.T) {
 	if sub1Items[0].Type != "priority_changed" {
 		t.Fatalf("expected type 'priority_changed', got %q", sub1Items[0].Type)
 	}
-	if sub1Items[0].Severity != "attention" {
-		t.Fatalf("expected severity 'attention' for high priority, got %q", sub1Items[0].Severity)
+	if sub1Items[0].Severity != "info" {
+		t.Fatalf("expected severity 'info', got %q", sub1Items[0].Severity)
 	}
 	// Title is now just the issue title; details contain from/to
 	expectedTitle := "priority test issue"
 	if sub1Items[0].Title != expectedTitle {
 		t.Fatalf("expected title %q, got %q", expectedTitle, sub1Items[0].Title)
-	}
-}
-
-// TestNotification_PriorityChangedSeverity verifies that the priority_changed
-// notification severity is driven by the NEW priority: urgent/high promote to
-// `attention` (Feishu DM fan-out), while medium/low/none and downgrades stay
-// `info` (WS-only).
-func TestNotification_PriorityChangedSeverity(t *testing.T) {
-	cases := []struct {
-		name         string
-		newPriority  string
-		prevPriority string
-		wantSeverity string
-	}{
-		{"urgent_promotes", "urgent", "medium", "attention"},
-		{"high_promotes", "high", "medium", "attention"},
-		{"medium_stays_info", "medium", "low", "info"},
-		{"low_stays_info", "low", "medium", "info"},
-		{"none_stays_info", "none", "high", "info"},
-		{"downgrade_urgent_to_low", "low", "urgent", "info"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			queries := db.New(testPool)
-			bus := newNotificationBus(t, queries)
-
-			subEmail := "notif-prio-sev-" + tc.name + "@multica.ai"
-			subID := createTestUser(t, subEmail)
-			t.Cleanup(func() { cleanupTestUser(t, subEmail) })
-
-			issueID := createTestIssue(t, testWorkspaceID, testUserID)
-			t.Cleanup(func() {
-				cleanupInboxForIssue(t, issueID)
-				cleanupTestIssue(t, issueID)
-			})
-
-			addTestSubscriber(t, issueID, "member", testUserID, "creator")
-			addTestSubscriber(t, issueID, "member", subID, "assignee")
-
-			bus.Publish(events.Event{
-				Type:        protocol.EventIssueUpdated,
-				WorkspaceID: testWorkspaceID,
-				ActorType:   "member",
-				ActorID:     testUserID,
-				Payload: map[string]any{
-					"issue": handler.IssueResponse{
-						ID:          issueID,
-						WorkspaceID: testWorkspaceID,
-						Title:       "priority severity test issue",
-						Status:      "todo",
-						Priority:    tc.newPriority,
-						CreatorType: "member",
-						CreatorID:   testUserID,
-					},
-					"assignee_changed": false,
-					"status_changed":   false,
-					"priority_changed": true,
-					"prev_priority":    tc.prevPriority,
-				},
-			})
-
-			items := inboxItemsForRecipient(t, queries, subID)
-			if len(items) != 1 {
-				t.Fatalf("expected 1 inbox item, got %d", len(items))
-			}
-			if items[0].Type != "priority_changed" {
-				t.Fatalf("expected type 'priority_changed', got %q", items[0].Type)
-			}
-			if items[0].Severity != tc.wantSeverity {
-				t.Fatalf("expected severity %q for new priority %q, got %q",
-					tc.wantSeverity, tc.newPriority, items[0].Severity)
-			}
-		})
 	}
 }
 
@@ -1412,97 +1338,25 @@ func TestNotification_StatusChange_ReopenSurfacesNewTaskFailed(t *testing.T) {
 	}
 }
 
-// TestSeverityForStatusChange pins the severity a status_changed event
-// gets based on its target status. The "needs a human" set
-// (in_review / done / cancelled / blocked) is promoted to attention so
-// it clears the Feishu DM gate; routine forward progress stays info.
-func TestSeverityForStatusChange(t *testing.T) {
-	attention := []string{"in_review", "done", "cancelled", "blocked"}
-	for _, s := range attention {
-		if got := severityForStatusChange(s); got != "attention" {
-			t.Errorf("severityForStatusChange(%q) = %q, want attention", s, got)
-		}
+// TestSeverityForComment verifies the actor-aware severity assignment for
+// new_comment inbox items (MAC-12653): agent-authored comments get
+// "attention" (triggers Feishu DM), member-authored comments stay "info"
+// (WS-only).
+func TestSeverityForComment(t *testing.T) {
+	cases := []struct {
+		actorType string
+		want      string
+	}{
+		{"agent", "attention"},
+		{"member", "info"},
+		{"system", "info"},
+		{"", "info"},
 	}
-	info := []string{"todo", "in_progress", "backlog"}
-	for _, s := range info {
-		if got := severityForStatusChange(s); got != "info" {
-			t.Errorf("severityForStatusChange(%q) = %q, want info", s, got)
-		}
-	}
-	// Unknown / empty statuses default to info (no DM flood on surprise).
-	for _, s := range []string{"", "unknown"} {
-		if got := severityForStatusChange(s); got != "info" {
-			t.Errorf("severityForStatusChange(%q) = %q, want info", s, got)
-		}
-	}
-}
-
-// TestNotification_StatusChanged_AttentionForReview verifies that a
-// status_changed transition into a "needs a human" target state
-// (in_review) is stamped with the `attention` severity so it clears the
-// Feishu DM gate, while a transition into a routine state (backlog)
-// stays `info`.
-func TestNotification_StatusChanged_AttentionForReview(t *testing.T) {
-	queries := db.New(testPool)
-	bus := newNotificationBus(t, queries)
-
-	subEmail := "notif-status-severity@multica.ai"
-	subID := createTestUser(t, subEmail)
-	t.Cleanup(func() { cleanupTestUser(t, subEmail) })
-
-	issueID := createTestIssue(t, testWorkspaceID, testUserID)
-	t.Cleanup(func() {
-		cleanupInboxForIssue(t, issueID)
-		cleanupTestIssue(t, issueID)
-	})
-
-	addTestSubscriber(t, issueID, "member", testUserID, "creator")
-	addTestSubscriber(t, issueID, "member", subID, "assignee")
-
-	publishStatusChange(bus, issueID, "in_review", "todo")
-
-	subItems := inboxItemsForRecipient(t, queries, subID)
-	if len(subItems) != 1 {
-		t.Fatalf("expected 1 inbox item for sub, got %d", len(subItems))
-	}
-	if subItems[0].Type != "status_changed" {
-		t.Fatalf("expected type 'status_changed', got %q", subItems[0].Type)
-	}
-	if subItems[0].Severity != "attention" {
-		t.Fatalf("in_review flip: expected severity 'attention', got %q", subItems[0].Severity)
-	}
-}
-
-// TestNotification_StatusChanged_InfoForRoutineStatus verifies that
-// transitions into routine forward-progress states (todo / in_progress /
-// backlog) keep the `info` severity and therefore do not trigger a DM.
-func TestNotification_StatusChanged_InfoForRoutineStatus(t *testing.T) {
-	queries := db.New(testPool)
-	bus := newNotificationBus(t, queries)
-
-	subEmail := "notif-status-routine@multica.ai"
-	subID := createTestUser(t, subEmail)
-	t.Cleanup(func() { cleanupTestUser(t, subEmail) })
-
-	issueID := createTestIssue(t, testWorkspaceID, testUserID)
-	t.Cleanup(func() {
-		cleanupInboxForIssue(t, issueID)
-		cleanupTestIssue(t, issueID)
-	})
-
-	addTestSubscriber(t, issueID, "member", testUserID, "creator")
-	addTestSubscriber(t, issueID, "member", subID, "assignee")
-
-	for _, to := range []string{"todo", "in_progress", "backlog"} {
-		cleanupInboxForIssue(t, issueID)
-		publishStatusChange(bus, issueID, to, "in_review")
-
-		subItems := inboxItemsForRecipient(t, queries, subID)
-		if len(subItems) != 1 {
-			t.Fatalf("status %q: expected 1 inbox item for sub, got %d", to, len(subItems))
-		}
-		if subItems[0].Severity != "info" {
-			t.Fatalf("status %q: expected severity 'info', got %q", to, subItems[0].Severity)
-		}
+	for _, tc := range cases {
+		t.Run(tc.actorType, func(t *testing.T) {
+			if got := severityForComment(tc.actorType); got != tc.want {
+				t.Errorf("severityForComment(%q) = %q, want %q", tc.actorType, got, tc.want)
+			}
+		})
 	}
 }

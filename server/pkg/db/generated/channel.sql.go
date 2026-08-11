@@ -1442,6 +1442,56 @@ func (q *Queries) ListChannelUserBindingsByMulticaUser(ctx context.Context, arg 
 	return items, nil
 }
 
+const listChannelUserBindingByAgent = `-- name: ListChannelUserBindingByAgent :many
+SELECT b.id, b.workspace_id, b.multica_user_id, b.installation_id, b.channel_type, b.channel_user_id, b.config, b.bound_at FROM channel_user_binding b
+JOIN channel_installation ci ON ci.id = b.installation_id
+WHERE b.workspace_id = $1
+  AND b.multica_user_id = $2
+  AND b.channel_type = 'feishu'
+  AND ci.agent_id = $3
+`
+
+type ListChannelUserBindingByAgentParams struct {
+	WorkspaceID   pgtype.UUID `json:"workspace_id"`
+	MulticaUserID pgtype.UUID `json:"multica_user_id"`
+	AgentID       pgtype.UUID `json:"agent_id"`
+}
+
+// Actor-gated single-DM lookup (MAC-12653): given the actor agent that
+// triggered the inbox event, return the ONE binding whose installation
+// belongs to that agent. Replaces the fan-out loop so the user gets a
+// single DM from the bot of the agent that did the work, not one DM per
+// bound bot. Joins channel_installation to filter by agent_id. Callers
+// must re-check installation status before sending.
+func (q *Queries) ListChannelUserBindingByAgent(ctx context.Context, arg ListChannelUserBindingByAgentParams) ([]ChannelUserBinding, error) {
+	rows, err := q.db.Query(ctx, listChannelUserBindingByAgent, arg.WorkspaceID, arg.MulticaUserID, arg.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelUserBinding{}
+	for rows.Next() {
+		var i ChannelUserBinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.MulticaUserID,
+			&i.InstallationID,
+			&i.ChannelType,
+			&i.ChannelUserID,
+			&i.Config,
+			&i.BoundAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockChannelChatSessionPendingFresh = `-- name: LockChannelChatSessionPendingFresh :one
 SELECT pending_fresh FROM channel_chat_session_binding
 WHERE chat_session_id = $1

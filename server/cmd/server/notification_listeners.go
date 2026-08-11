@@ -53,19 +53,17 @@ func priorityLabel(p string) string {
 	return p
 }
 
-// severityForPriorityChange picks the notification severity for a
-// priority_changed event based on the new priority. Promoting an issue
-// to urgent/high is high-signal ("this needs your attention now"), so it
-// surfaces as `attention` to fan out a Feishu DM via the inbox severity
-// gate. All other priorities (and downgrades) stay `info` (WS-only) to
-// avoid a DM flood on routine priority edits.
-func severityForPriorityChange(newPriority string) string {
-	switch newPriority {
-	case "urgent", "high":
+// severityForComment assigns the inbox severity for a new_comment event
+// based on who authored the comment (MAC-12653). Agent-authored comments
+// are high-signal ("attention" → triggers Feishu DM) because they carry
+// work results the user needs to see. Member-authored comments stay
+// "info" (WS-only) — the user likely already has the app open if they
+// or a teammate just commented.
+func severityForComment(actorType string) string {
+	if actorType == "agent" {
 		return "attention"
-	default:
-		return "info"
 	}
+	return "info"
 }
 
 var emptyDetails = []byte("{}")
@@ -142,19 +140,6 @@ func deliverToSubscriber(reason, notifType, issueStatus string) bool {
 		return false
 	}
 	return delegatedStatusNotify[issueStatus]
-}
-
-// severityForStatusChange decides the inbox severity for a status_changed
-// event based on the target status. Transitions into a "needs a human"
-// state — the same set delegatedStatusNotify covers (in_review / done /
-// cancelled / blocked) — are promoted to `attention` so they pass the
-// Feishu DM severity gate (see inbox_dm.go). Routine forward progress
-// (todo / in_progress / backlog) stays `info` to avoid a DM flood.
-func severityForStatusChange(toStatus string) string {
-	if delegatedStatusNotify[toStatus] {
-		return "attention"
-	}
-	return "info"
 }
 
 // notifTypeToGroup maps each InboxItemType to a user-configurable preference
@@ -779,7 +764,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   issue.Status,
 			})
 			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
-				nil, "status_changed", severityForStatusChange(issue.Status),
+				nil, "status_changed", "info",
 				issue.Title, "",
 				statusDetails)
 
@@ -799,7 +784,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   issue.Priority,
 			})
 			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
-				nil, "priority_changed", severityForPriorityChange(issue.Priority),
+				nil, "priority_changed", "info",
 				issue.Title, "",
 				priorityDetails)
 		}
@@ -914,7 +899,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		}
 
 		notifySubscribers(ctx, queries, bus, issueID, issueStatus, e.WorkspaceID, e,
-			nil, "new_comment", "info",
+			nil, "new_comment", severityForComment(authorType),
 			issueTitle, commentContent,
 			commentDetails)
 
