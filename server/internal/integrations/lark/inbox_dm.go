@@ -8,9 +8,12 @@ package lark
 // DM they can read offline. Zero schema change, zero new Lark scope.
 //
 // Severity gate: only `action_required` and `attention` severities fan
-// out. `info` (every comment, every status flip) stays WS-only to avoid
-// a DM flood — see notification_listeners.go for the per-call-site
-// promotions that make `mentioned` / `unassigned` reach this gate.
+// out. `info` (every comment, routine status flips) stays WS-only to
+// avoid a DM flood — see notification_listeners.go for the per-call-site
+// promotions that make `mentioned` / `unassigned` reach this gate, and
+// severityForStatusChange, which promotes a status_changed into
+// in_review / done / cancelled / blocked to `attention` so those
+// "needs a human" transitions DM the recipient.
 //
 // Mute gate: the user's `system_notifications` preference is honored
 // exactly like the OS banner path — when muted, the DM is skipped but
@@ -247,7 +250,9 @@ func (n *InboxDMNotifier) systemNotificationsMuted(ctx context.Context, workspac
 
 // shouldDMSeverity reports whether a severity level should trigger a
 // Feishu DM. Conservative default: only action_required and attention.
-// info (every comment, every status flip) stays WS-only.
+// info (every comment, routine status flips) stays WS-only; a
+// status_changed that reaches in_review / done / cancelled / blocked is
+// promoted to attention upstream (see notification_listeners.go).
 func shouldDMSeverity(severity string) bool {
 	switch severity {
 	case "action_required", "attention":

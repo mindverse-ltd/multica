@@ -129,6 +129,19 @@ func deliverToSubscriber(reason, notifType, issueStatus string) bool {
 	return delegatedStatusNotify[issueStatus]
 }
 
+// severityForStatusChange decides the inbox severity for a status_changed
+// event based on the target status. Transitions into a "needs a human"
+// state — the same set delegatedStatusNotify covers (in_review / done /
+// cancelled / blocked) — are promoted to `attention` so they pass the
+// Feishu DM severity gate (see inbox_dm.go). Routine forward progress
+// (todo / in_progress / backlog) stays `info` to avoid a DM flood.
+func severityForStatusChange(toStatus string) string {
+	if delegatedStatusNotify[toStatus] {
+		return "attention"
+	}
+	return "info"
+}
+
 // notifTypeToGroup maps each InboxItemType to a user-configurable preference
 // group. Types not in this map are always delivered (not configurable).
 var notifTypeToGroup = map[string]string{
@@ -751,7 +764,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   issue.Status,
 			})
 			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
-				nil, "status_changed", "info",
+				nil, "status_changed", severityForStatusChange(issue.Status),
 				issue.Title, "",
 				statusDetails)
 
