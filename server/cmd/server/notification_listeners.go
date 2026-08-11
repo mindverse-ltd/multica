@@ -53,6 +53,19 @@ func priorityLabel(p string) string {
 	return p
 }
 
+// severityForComment assigns the inbox severity for a new_comment event
+// based on who authored the comment (MAC-12653). Agent-authored comments
+// are high-signal ("attention" → triggers Feishu DM) because they carry
+// work results the user needs to see. Member-authored comments stay
+// "info" (WS-only) — the user likely already has the app open if they
+// or a teammate just commented.
+func severityForComment(actorType string) string {
+	if actorType == "agent" {
+		return "attention"
+	}
+	return "info"
+}
+
 var emptyDetails = []byte("{}")
 
 // parseMentions extracts mentions from markdown content.
@@ -886,7 +899,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		}
 
 		notifySubscribers(ctx, queries, bus, issueID, issueStatus, e.WorkspaceID, e,
-			nil, "new_comment", "info",
+			nil, "new_comment", severityForComment(authorType),
 			issueTitle, commentContent,
 			commentDetails)
 

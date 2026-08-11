@@ -423,6 +423,20 @@ WHERE workspace_id = sqlc.arg('workspace_id')
   AND multica_user_id = sqlc.arg('multica_user_id')
   AND channel_type = 'feishu';
 
+-- name: ListChannelUserBindingByAgent :many
+-- Actor-gated single-DM lookup (MAC-12653): given the actor agent that
+-- triggered the inbox event, return the ONE binding whose installation
+-- belongs to that agent. Replaces the fan-out loop so the user gets a
+-- single DM from the bot of the agent that did the work, not one DM per
+-- bound bot. Joins channel_installation to filter by agent_id. Callers
+-- must re-check installation status before sending.
+SELECT b.* FROM channel_user_binding b
+JOIN channel_installation ci ON ci.id = b.installation_id
+WHERE b.workspace_id = sqlc.arg('workspace_id')
+  AND b.multica_user_id = sqlc.arg('multica_user_id')
+  AND b.channel_type = 'feishu'
+  AND ci.agent_id = sqlc.arg('agent_id');
+
 -- name: FindChannelBindingForMember :one
 -- Outbound notification lookup: given a Multica member and a channel_type,
 -- return the (installation, channel_user_id) that outbound push should

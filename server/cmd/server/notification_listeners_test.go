@@ -1337,3 +1337,26 @@ func TestNotification_StatusChange_ReopenSurfacesNewTaskFailed(t *testing.T) {
 		t.Fatalf("expected 1 archived task_failed row preserved from prior cycle, got %d", archived)
 	}
 }
+
+// TestSeverityForComment verifies the actor-aware severity assignment for
+// new_comment inbox items (MAC-12653): agent-authored comments get
+// "attention" (triggers Feishu DM), member-authored comments stay "info"
+// (WS-only).
+func TestSeverityForComment(t *testing.T) {
+	cases := []struct {
+		actorType string
+		want      string
+	}{
+		{"agent", "attention"},
+		{"member", "info"},
+		{"system", "info"},
+		{"", "info"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.actorType, func(t *testing.T) {
+			if got := severityForComment(tc.actorType); got != tc.want {
+				t.Errorf("severityForComment(%q) = %q, want %q", tc.actorType, got, tc.want)
+			}
+		})
+	}
+}
