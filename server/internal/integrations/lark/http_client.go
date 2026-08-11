@@ -503,6 +503,51 @@ func (c *httpAPIClient) SendBindingPromptCard(ctx context.Context, p BindingProm
 	return nil
 }
 
+// SendDirectMessage posts a plain text IM message to a single user by
+// open_id. The inbox→Feishu DM notification path uses this to deliver
+// inbox alerts (mentions, assignments) to users who have bound their
+// open_id to an installation. Transport mirrors
+// SendBindingPromptCard's receive_id_type=open_id path; only msg_type
+// and content envelope differ.
+func (c *httpAPIClient) SendDirectMessage(ctx context.Context, p DirectMessageParams) error {
+	if p.OpenID == "" {
+		return errors.New("lark http client: missing open_id")
+	}
+	if p.Text == "" {
+		return errors.New("lark http client: missing text")
+	}
+	contentJSON, err := json.Marshal(map[string]string{"text": p.Text})
+	if err != nil {
+		return fmt.Errorf("lark http client: marshal direct message content: %w", err)
+	}
+	token, err := c.tenantAccessToken(ctx, p.InstallationID)
+	if err != nil {
+		return err
+	}
+	q := url.Values{}
+	q.Set("receive_id_type", "open_id")
+	body := map[string]string{
+		"receive_id": string(p.OpenID),
+		"msg_type":   "text",
+		"content":    string(contentJSON),
+	}
+	var resp struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	path := "/open-apis/im/v1/messages?" + q.Encode()
+	if err := c.doJSON(ctx, c.resolveBaseURL(p.InstallationID), http.MethodPost, path, token, body, &resp); err != nil {
+		return fmt.Errorf("lark http client: send direct message: %w", err)
+	}
+	if resp.Code != 0 {
+		if isTokenError(resp.Code) {
+			c.invalidateToken(p.InstallationID.AppID)
+		}
+		return fmt.Errorf("lark http client: send direct message: code=%d msg=%q", resp.Code, resp.Msg)
+	}
+	return nil
+}
+
 // GetBotInfo calls /open-apis/bot/v3/info to learn the Bot's
 // per-installation `open_id` and then /open-apis/contact/v3/users/
 // {open_id}?user_id_type=open_id to resolve its stable `union_id`.

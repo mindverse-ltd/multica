@@ -61,6 +61,13 @@ type APIClient interface {
 	// Lark's card schema.
 	SendBindingPromptCard(ctx context.Context, p BindingPromptParams) error
 
+	// SendDirectMessage posts a plain text IM message to a single user
+	// by open_id. Used by the inbox→Feishu DM notification path — the
+	// recipient is a Multica user who has bound their open_id to an
+	// installation, not a chat. Mirrors SendBindingPromptCard's
+	// receive_id_type=open_id transport.
+	SendDirectMessage(ctx context.Context, p DirectMessageParams) error
+
 	// GetBotInfo returns the Bot's per-installation `open_id` (the
 	// `bot_open_id` we persist on lark_installation). RegistrationService
 	// is the only caller — after the device-flow registration returns
@@ -314,6 +321,16 @@ type BindingPromptParams struct {
 	BindURL string
 }
 
+// DirectMessageParams carries the data needed to post a plain text IM
+// message to a single user by open_id. Used by the inbox→Feishu DM
+// notification fan-out — the recipient bound their open_id to an
+// installation, and we DM them through that installation's bot.
+type DirectMessageParams struct {
+	InstallationID InstallationCredentials
+	OpenID         OpenID
+	Text           string
+}
+
 // AddReactionParams is the input shape for adding an emoji reaction to
 // a message.
 type AddReactionParams struct {
@@ -408,6 +425,11 @@ func (s *stubAPIClient) SendMarkdownCard(ctx context.Context, p SendMarkdownCard
 
 func (s *stubAPIClient) SendBindingPromptCard(ctx context.Context, p BindingPromptParams) error {
 	s.log.Warn("lark stub client: SendBindingPromptCard called", "open_id", string(p.OpenID))
+	return ErrAPIClientNotConfigured
+}
+
+func (s *stubAPIClient) SendDirectMessage(ctx context.Context, p DirectMessageParams) error {
+	s.log.Warn("lark stub client: SendDirectMessage called", "open_id", string(p.OpenID))
 	return ErrAPIClientNotConfigured
 }
 

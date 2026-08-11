@@ -80,6 +80,10 @@ func (s *stubAPIClientWithRecorder) SendBindingPromptCard(ctx context.Context, p
 	return nil
 }
 
+func (s *stubAPIClientWithRecorder) SendDirectMessage(ctx context.Context, p DirectMessageParams) error {
+	return nil
+}
+
 func (s *stubAPIClientWithRecorder) GetBotInfo(ctx context.Context, creds InstallationCredentials) (BotInfo, error) {
 	return BotInfo{}, nil
 }

@@ -589,7 +589,7 @@ func notifyMentionedMembers(
 			RecipientType: "member",
 			RecipientID:   parseUUID(id),
 			Type:          "mentioned",
-			Severity:      "info",
+			Severity:      "attention",
 			IssueID:       parseUUID(issueID),
 			Title:         title,
 			ActorType:     util.StrToText(e.ActorType),
@@ -714,11 +714,15 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			// Direct: notify only a previous member assignee about unassignment.
 			// This is intentionally narrower than isAssignmentRecipientType: agents
 			// do not receive unassigned notifications.
+			//
+			// Severity is `attention` (not `info`) so the Feishu DM fan-out
+			// picks it up — losing an assignment is high-signal enough to
+			// ping the user out-of-band. See inbox_dm.go's severity gate.
 			if prevAssigneeType != nil && prevAssigneeID != nil && *prevAssigneeType == "member" {
 				notifyDirect(ctx, queries, bus,
 					"member", *prevAssigneeID,
 					e.WorkspaceID, e, issue.ID, issue.Status,
-					"unassigned", "info",
+					"unassigned", "attention",
 					issue.Title,
 					"",
 					assigneeDetails,

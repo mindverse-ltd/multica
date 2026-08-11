@@ -411,6 +411,18 @@ RETURNING *;
 SELECT * FROM channel_user_binding
 WHERE installation_id = $1 AND channel_user_id = $2;
 
+-- name: ListChannelUserBindingsByMulticaUser :many
+-- Outbound identity lookup: which channel_user_ids (Feishu open_ids) does
+-- this Multica user have, across all installations in a workspace? Used by
+-- the inbox→Feishu DM fan-out. Unlike FindChannelBindingForMember, this
+-- returns every binding (one DM per bot), because each installation is a
+-- separate Lark app and only that app can DM its own bound open_id.
+-- Callers must re-check installation status before sending.
+SELECT * FROM channel_user_binding
+WHERE workspace_id = sqlc.arg('workspace_id')
+  AND multica_user_id = sqlc.arg('multica_user_id')
+  AND channel_type = 'feishu';
+
 -- name: FindChannelBindingForMember :one
 -- Outbound notification lookup: given a Multica member and a channel_type,
 -- return the (installation, channel_user_id) that outbound push should
