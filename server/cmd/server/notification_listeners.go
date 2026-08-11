@@ -53,6 +53,21 @@ func priorityLabel(p string) string {
 	return p
 }
 
+// severityForPriorityChange picks the notification severity for a
+// priority_changed event based on the new priority. Promoting an issue
+// to urgent/high is high-signal ("this needs your attention now"), so it
+// surfaces as `attention` to fan out a Feishu DM via the inbox severity
+// gate. All other priorities (and downgrades) stay `info` (WS-only) to
+// avoid a DM flood on routine priority edits.
+func severityForPriorityChange(newPriority string) string {
+	switch newPriority {
+	case "urgent", "high":
+		return "attention"
+	default:
+		return "info"
+	}
+}
+
 var emptyDetails = []byte("{}")
 
 // parseMentions extracts mentions from markdown content.
@@ -771,7 +786,7 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 				"to":   issue.Priority,
 			})
 			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
-				nil, "priority_changed", "info",
+				nil, "priority_changed", severityForPriorityChange(issue.Priority),
 				issue.Title, "",
 				priorityDetails)
 		}
