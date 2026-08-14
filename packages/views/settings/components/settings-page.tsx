@@ -17,13 +17,16 @@ import {
   ListTodo,
   Zap,
   Blocks,
+  CreditCard,
 } from "lucide-react";
 import { GitHubMark } from "./github-mark";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@multica/ui/components/ui/tabs";
-import { useIsMobile } from "@multica/ui/hooks/use-mobile";
 import { useCurrentWorkspace } from "@multica/core/paths";
 import { useFeatureEnabled } from "@multica/core/config";
-import { PLUGINS_V1_FLAG } from "@multica/core/feature-flags";
+import {
+  BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG,
+  PLUGINS_V1_FLAG,
+} from "@multica/core/feature-flags";
 import { useNavigation } from "../../navigation";
 import { PageHeader } from "../../layout/page-header";
 import { AccountTab } from "./account-tab";
@@ -43,7 +46,7 @@ import { PropertiesTab } from "./properties-tab";
 import { QuickActionsTab } from "./quick-actions-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
 import { PluginsTab } from "./plugins-tab";
-import { CollapsedNavTrigger } from "../../layout/page-header";
+import { BillingTab } from "./billing-tab";
 import { useT } from "../../i18n";
 
 const ACCOUNT_TAB_KEYS = ["profile", "preferences", "shortcuts", "issue", "chat", "notifications", "tokens"] as const;
@@ -64,6 +67,7 @@ const WORKSPACE_TAB_KEYS = [
   "integrations",
   "labs",
   "members",
+  "billing",
   "labels",
   "properties",
   "quick_actions",
@@ -76,6 +80,7 @@ const WORKSPACE_TAB_VALUES = {
   integrations: "integrations",
   labs: "labs",
   members: "members",
+  billing: "billing",
   labels: "labels",
   properties: "properties",
   quick_actions: "quick-actions",
@@ -88,6 +93,7 @@ const WORKSPACE_TAB_ICONS = {
   integrations: Plug,
   labs: FlaskConical,
   members: Users,
+  billing: CreditCard,
   labels: Tags,
   properties: SlidersHorizontal,
   quick_actions: Zap,
@@ -105,8 +111,6 @@ const LEGACY_WORKSPACE_TAB_REDIRECTS: Record<string, string> = {
   lark: "integrations",
 };
 
-const SETTINGS_TAB_TRIGGER_CLASS =
-  "h-8 shrink-0 px-2.5 hover:bg-surface-hover data-active:!bg-surface-selected data-active:!text-surface-selected-foreground data-active:hover:!bg-surface-selected md:!w-full md:px-2 md:after:hidden";
 
 export interface ExtraSettingsTab {
   value: string;
@@ -124,12 +128,20 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
   const { t } = useT("settings");
   const workspaceName = useCurrentWorkspace()?.name;
   const navigation = useNavigation();
-  const isMobile = useIsMobile();
   const pluginsEnabled = useFeatureEnabled(PLUGINS_V1_FLAG, false);
+  const billingEnabled = useFeatureEnabled(
+    BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG,
+    false,
+  );
 
   const visibleWorkspaceTabKeys = React.useMemo(
-    () => WORKSPACE_TAB_KEYS.filter((key) => key !== "plugins" || pluginsEnabled),
-    [pluginsEnabled],
+    () =>
+      WORKSPACE_TAB_KEYS.filter(
+        (key) =>
+          (key !== "plugins" || pluginsEnabled) &&
+          (key !== "billing" || billingEnabled),
+      ),
+    [billingEnabled, pluginsEnabled],
   );
 
   // Whitelist of valid tab values; unknown ?tab=… values silently fall back to
@@ -147,7 +159,9 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
 
   const tabFromUrl = navigation.searchParams.get(TAB_QUERY_KEY);
   const candidateTab = tabFromUrl
-    ? LEGACY_WORKSPACE_TAB_REDIRECTS[tabFromUrl] ?? tabFromUrl
+    ? tabFromUrl === "billing" && !billingEnabled
+      ? "workspace"
+      : LEGACY_WORKSPACE_TAB_REDIRECTS[tabFromUrl] ?? tabFromUrl
     : null;
   const activeTab =
     candidateTab && validTabs.has(candidateTab) ? candidateTab : DEFAULT_TAB;
@@ -203,7 +217,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
             <span className="px-2 pb-1 pt-4 text-xs font-medium text-muted-foreground truncate">
               {workspaceName ?? t(($) => $.page.workspace_fallback)}
             </span>
-            {WORKSPACE_TAB_KEYS.map((key) => {
+            {visibleWorkspaceTabKeys.map((key) => {
               const Icon = WORKSPACE_TAB_ICONS[key];
               return (
                 <TabsTrigger key={key} value={WORKSPACE_TAB_VALUES[key]}>
@@ -220,6 +234,9 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <div className="w-full max-w-3xl mx-auto p-4 md:p-6">
             <TabsContent value="profile"><AccountTab /></TabsContent>
             <TabsContent value="preferences"><PreferencesTab /></TabsContent>
+            <TabsContent value="shortcuts"><KeyboardShortcutsTab /></TabsContent>
+            <TabsContent value="issue"><IssueTab /></TabsContent>
+            <TabsContent value="chat"><ChatTab /></TabsContent>
             <TabsContent value="notifications"><NotificationsTab /></TabsContent>
             <TabsContent value="tokens"><TokensTab /></TabsContent>
             <TabsContent value="workspace"><WorkspaceTab /></TabsContent>
@@ -228,6 +245,13 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
             <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
             <TabsContent value="labs"><LabsTab /></TabsContent>
             <TabsContent value="members"><MembersTab /></TabsContent>
+            {billingEnabled ? (
+              <TabsContent value="billing"><BillingTab /></TabsContent>
+            ) : null}
+            <TabsContent value="labels"><LabelsTab /></TabsContent>
+            <TabsContent value="properties"><PropertiesTab /></TabsContent>
+            <TabsContent value="quick-actions"><QuickActionsTab /></TabsContent>
+            {pluginsEnabled ? <TabsContent value="plugins"><PluginsTab /></TabsContent> : null}
             {extraAccountTabs?.map((tab) => (
               <TabsContent key={tab.value} value={tab.value}>{tab.content}</TabsContent>
             ))}
