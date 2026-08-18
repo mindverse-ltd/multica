@@ -22,14 +22,22 @@ import (
 // enough that the frontend Loader2 spinner appears to hang forever
 // ("搜索卡死没有任何反应", MUL-4059).
 //
-// The 3 s cap is generous compared to a properly indexed search (typically
+// The 8 s cap is generous compared to a properly indexed search (typically
 // <50 ms) and short enough that the frontend's implicit request timeout
 // (browser default, ~30 s) never kicks in. On timeout the caller sees a
 // 503 with a descriptive error rather than a stalled connection —
 // SearchIssues / SearchProjects map SQLSTATE 57014 to
 // http.StatusServiceUnavailable so the frontend can distinguish this
 // from a generic 500.
-const searchStatementTimeout = 3 * time.Second
+//
+// Raised from 3 s to 8 s after pr-multica-review GitHub Action failures
+// surfaced on macaron-developer workspace (mindverse-ltd/macaron-service
+// issue #1354): multi-word queries like "review pr macaron-service#<N>"
+// trigger OR-of-LIKE plans that the planner occasionally fails to route
+// onto the pg_bigm / pg_trgm GIN bitmap, falling back to Seq Scans that
+// exceed 3 s under load. 8 s covers the p99 of indexed searches while
+// still bounding worst-case latency.
+const searchStatementTimeout = 8 * time.Second
 
 // searchStatementTimeoutOverride, when non-zero, replaces
 // searchStatementTimeout for the duration of a test. Never read outside
