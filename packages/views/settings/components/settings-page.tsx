@@ -13,6 +13,7 @@ import {
   Plug,
   MessageCircle,
   Tags,
+  CircleDot,
   Keyboard,
   ListTodo,
   Zap,
@@ -43,6 +44,7 @@ import { IntegrationsTab } from "./integrations-tab";
 import { LabsTab } from "./labs-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { LabelsTab } from "./labels-tab";
+import { IssueStatusesTab } from "./issue-statuses-tab";
 import { PropertiesTab } from "./properties-tab";
 import { QuickActionsTab } from "./quick-actions-tab";
 import { KeyboardShortcutsTab } from "./keyboard-shortcuts-tab";
@@ -71,6 +73,7 @@ const WORKSPACE_TAB_KEYS = [
   "members",
   "billing",
   "labels",
+  "issue_statuses",
   "properties",
   "quick_actions",
   "mcp",
@@ -85,6 +88,7 @@ const WORKSPACE_TAB_VALUES = {
   members: "members",
   billing: "billing",
   labels: "labels",
+  issue_statuses: "issue-statuses",
   properties: "properties",
   quick_actions: "quick-actions",
   mcp: "mcp",
@@ -99,6 +103,7 @@ const WORKSPACE_TAB_ICONS = {
   members: Users,
   billing: CreditCard,
   labels: Tags,
+  issue_statuses: CircleDot,
   properties: SlidersHorizontal,
   quick_actions: Zap,
   mcp: Server,
