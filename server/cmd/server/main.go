@@ -337,7 +337,8 @@ func main() {
 	}
 
 	// Connect to database
-	pool, err := newDBPool(ctx, dbURL)
+	startupSettings := dbstartup.SettingsFromEnv()
+	pool, err := newDBPool(context.Background(), dbURL, startupSettings.ConnectTimeout)
 	if err != nil {
 		slog.Error("unable to connect to database", "error", err)
 		os.Exit(1)
@@ -362,7 +363,6 @@ func main() {
 	stopStartup()
 	slog.Info("connected to database")
 	logPoolConfig(pool)
-	ctx := context.Background()
 
 	bus := events.New()
 	hub := realtime.NewHub()
