@@ -1643,6 +1643,63 @@ func (q *Queries) ListChannelUserBindingsByMulticaUser(ctx context.Context, arg 
 	return items, nil
 }
 
+const lockChannelChatContextGenerationByRevision = `-- name: LockChannelChatContextGenerationByRevision :one
+SELECT chat_session_id, revision, history_start_message_id, history_end_message_id, history_boundary_pending, pending_fresh, initiator_user_id, created_at FROM channel_chat_context_generation
+WHERE chat_session_id = $1
+  AND revision = $2
+FOR UPDATE
+`
+
+type LockChannelChatContextGenerationByRevisionParams struct {
+	ChatSessionID pgtype.UUID `json:"chat_session_id"`
+	Revision      int64       `json:"revision"`
+}
+
+func (q *Queries) LockChannelChatContextGenerationByRevision(ctx context.Context, arg LockChannelChatContextGenerationByRevisionParams) (ChannelChatContextGeneration, error) {
+	row := q.db.QueryRow(ctx, lockChannelChatContextGenerationByRevision, arg.ChatSessionID, arg.Revision)
+	var i ChannelChatContextGeneration
+	err := row.Scan(
+		&i.ChatSessionID,
+		&i.Revision,
+		&i.HistoryStartMessageID,
+		&i.HistoryEndMessageID,
+		&i.HistoryBoundaryPending,
+		&i.PendingFresh,
+		&i.InitiatorUserID,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const lockChannelChatSessionBindingForContext = `-- name: LockChannelChatSessionBindingForContext :one
+SELECT id, chat_session_id, installation_id, channel_type, channel_chat_id, chat_type, last_message_id, last_thread_id, config, created_at, pending_fresh, context_revision FROM channel_chat_session_binding
+WHERE chat_session_id = $1
+FOR UPDATE
+`
+
+// Context mutations acquire this row after chat_session and before any
+// channel_chat_context_generation row. Keeping the statements separate makes
+// the lock order explicit and identical for append, /new, and task enqueue.
+func (q *Queries) LockChannelChatSessionBindingForContext(ctx context.Context, chatSessionID pgtype.UUID) (ChannelChatSessionBinding, error) {
+	row := q.db.QueryRow(ctx, lockChannelChatSessionBindingForContext, chatSessionID)
+	var i ChannelChatSessionBinding
+	err := row.Scan(
+		&i.ID,
+		&i.ChatSessionID,
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.ChannelChatID,
+		&i.ChatType,
+		&i.LastMessageID,
+		&i.LastThreadID,
+		&i.Config,
+		&i.CreatedAt,
+		&i.PendingFresh,
+		&i.ContextRevision,
+	)
+	return i, err
+}
+
 const lockChannelChatSessionPendingFresh = `-- name: LockChannelChatSessionPendingFresh :one
 SELECT pending_fresh FROM channel_chat_session_binding
 WHERE chat_session_id = $1
