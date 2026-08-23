@@ -70,7 +70,7 @@ endef
 ##@ Help
 
 help: ## Show available make targets and common local workflows
-	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nQuick start:\n  \033[36mmake dev\033[0m          Bootstrap the current checkout and start everything\n  \033[36mmake check\033[0m        Run the full local verification pipeline\n\nCheckout modes:\n  Main checkout uses \033[36m.env\033[0m\n  Worktrees use \033[36m.env.worktree\033[0m (generate with \033[36mmake worktree-env\033[0m)\n\n"} \
+	@awk 'BEGIN {FS = ":.*## "; printf "\nUsage:\n  make \033[36m<target>\033[0m\n\nQuick start:\n  \033[36mmake up\033[0m           Start this checkout'"'"'s environment (C=api,web,daemon,desktop)\n  \033[36mmake status\033[0m       Show what is running, and prove it is yours\n  \033[36mmake down\033[0m         Stop it again, keeping the database\n  \033[36mmake check\033[0m        Run the full local verification pipeline\n\nCheckout modes:\n  Main checkout uses \033[36m.env\033[0m\n  Worktrees use \033[36m.env.worktree\033[0m (generate with \033[36mmake worktree-env\033[0m)\n\n"} \
 		/^##@/ {printf "\n\033[1m%s\033[0m\n", substr($$0, 5); next} \
 		/^[a-zA-Z0-9_.-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
@@ -203,8 +203,8 @@ start: ## Start backend and frontend for the current checkout and run migrations
 stop: ## Stop backend and frontend processes for the current checkout
 	$(REQUIRE_ENV)
 	@echo "Stopping services..."
-	@-lsof -ti:$(PORT) | xargs kill -9 2>/dev/null
-	@-lsof -ti:$(FRONTEND_PORT) | xargs kill -9 2>/dev/null
+	@-lsof -nP -iTCP:$(PORT) -sTCP:LISTEN -t | xargs kill -9 2>/dev/null
+	@-lsof -nP -iTCP:$(FRONTEND_PORT) -sTCP:LISTEN -t | xargs kill -9 2>/dev/null
 	@case "$(DATABASE_URL)" in \
 		""|*@localhost:*|*@localhost/*|*@127.0.0.1:*|*@127.0.0.1/*|*@\[::1\]:*|*@\[::1\]/*) \
 			echo "✓ App processes stopped. Shared PostgreSQL is still running on localhost:$(POSTGRES_PORT)." ;; \
