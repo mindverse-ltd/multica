@@ -127,7 +127,10 @@ func (h *Handler) GetConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func daemonSetupURLsFromEnv() (string, string) {
-	serverURL := normalizePublicURL(os.Getenv("MULTICA_PUBLIC_URL"))
+	serverURL := normalizePublicURL(os.Getenv("MULTICA_DAEMON_SERVER_URL"))
+	if serverURL == "" {
+		serverURL = normalizePublicURL(os.Getenv("MULTICA_PUBLIC_URL"))
+	}
 	appURL := resolveFrontendAppURL()
 	if appURL == "" {
 		return "", ""
