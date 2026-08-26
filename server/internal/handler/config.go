@@ -76,6 +76,12 @@ type AppConfig struct {
 	// them, and only one of the two guesses is safe.
 	LocalWorktreeSupported bool `json:"local_worktree_supported"`
 
+	// AgentStarterPromptsSupported tells independently deployed clients that
+	// agent create/update persists starter_prompts. Older handlers ignored the
+	// unknown JSON field and still returned success, so clients must fail closed
+	// when this declaration is absent.
+	AgentStarterPromptsSupported bool `json:"agent_starter_prompts_supported"`
+
 	// ServerVersion is the running API build version, so self-hosted
 	// operators can confirm what's deployed and include it in bug reports.
 	// Only emitted on self-hosted deployments — omitted on the managed cloud,
