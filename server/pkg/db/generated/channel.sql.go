@@ -1858,6 +1858,72 @@ func (q *Queries) ListChannelInstallationsByWorkspace(ctx context.Context, arg L
 	return items, nil
 }
 
+const listChannelOutboundMessageIDsForBinding = `-- name: ListChannelOutboundMessageIDsForBinding :many
+SELECT outbound.channel_message_id FROM channel_outbound_message AS outbound
+WHERE outbound.binding_id = $1
+ORDER BY outbound.created_at ASC
+`
+
+func (q *Queries) ListChannelOutboundMessageIDsForBinding(ctx context.Context, bindingID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listChannelOutboundMessageIDsForBinding, bindingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var channel_message_id string
+		if err := rows.Scan(&channel_message_id); err != nil {
+			return nil, err
+		}
+		items = append(items, channel_message_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelOutboundMessagesByIDs = `-- name: ListChannelOutboundMessagesByIDs :many
+SELECT outbound.installation_id, outbound.channel_type, outbound.channel_message_id, outbound.binding_id, outbound.route_revision, outbound.task_id, outbound.outbound_kind, outbound.created_at FROM channel_outbound_message AS outbound
+WHERE outbound.installation_id = $1
+  AND outbound.channel_message_id = ANY($2::text[])
+`
+
+type ListChannelOutboundMessagesByIDsParams struct {
+	InstallationID    pgtype.UUID `json:"installation_id"`
+	ChannelMessageIds []string    `json:"channel_message_ids"`
+}
+
+func (q *Queries) ListChannelOutboundMessagesByIDs(ctx context.Context, arg ListChannelOutboundMessagesByIDsParams) ([]ChannelOutboundMessage, error) {
+	rows, err := q.db.Query(ctx, listChannelOutboundMessagesByIDs, arg.InstallationID, arg.ChannelMessageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ChannelOutboundMessage{}
+	for rows.Next() {
+		var i ChannelOutboundMessage
+		if err := rows.Scan(
+			&i.InstallationID,
+			&i.ChannelType,
+			&i.ChannelMessageID,
+			&i.BindingID,
+			&i.RouteRevision,
+			&i.TaskID,
+			&i.OutboundKind,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listChannelUserBindingsByMulticaUser = `-- name: ListChannelUserBindingsByMulticaUser :many
 SELECT id, workspace_id, multica_user_id, installation_id, channel_type, channel_user_id, config, bound_at FROM channel_user_binding
 WHERE workspace_id = $1
