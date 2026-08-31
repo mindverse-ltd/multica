@@ -830,16 +830,25 @@ func main() {
 				slog.Warn("channel router: drain deadline reached; deferred media fallback remains durable")
 			}
 			drainCancel()
-		}
-	}
-
-	if metricsServer != nil {
-		metricsShutdownCtx, metricsShutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
-		if err := metricsServer.Shutdown(metricsShutdownCtx); err != nil {
-			slog.Error("metrics server forced to shutdown", "error", err)
-		}
-		metricsShutdownCancel()
-	}
+		},
+		StopMetricsServer: func() {
+			if metricsServer == nil {
+				return
+			}
+			metricsShutdownCtx, metricsShutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err := metricsServer.Shutdown(metricsShutdownCtx); err != nil {
+				slog.Error("metrics server forced to shutdown", "error", err)
+			}
+			metricsShutdownCancel()
+		},
+		StopProfiling: func() {
+			profilingShutdownCtx, profilingShutdownCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			if err := profilingServer.Shutdown(profilingShutdownCtx); err != nil {
+				slog.Error("pprof server forced to shutdown", "error", err)
+			}
+			profilingShutdownCancel()
+		},
+	}.run()
 	if err := tracing.Shutdown(context.Background()); err != nil {
 		slog.Warn("opentelemetry shutdown failed", "error", err)
 	}
