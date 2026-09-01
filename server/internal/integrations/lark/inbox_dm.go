@@ -8,9 +8,13 @@ package lark
 // DM they can read offline. Zero schema change, zero new Lark scope.
 //
 // Severity gate: only `action_required` and `attention` severities fan
-// out. `info` (every comment, every status flip) stays WS-only to avoid
-// a DM flood — see notification_listeners.go for the per-call-site
-// promotions that make `mentioned` / `unassigned` reach this gate.
+// out. `info` stays WS-only to avoid a DM flood. Per-call-site severities
+// (see notification_listeners.go):
+//   - mentioned / unassigned / issue_assigned → action_required / attention
+//   - priority_changed → dynamic by new priority: urgent/high = attention
+//     (DM), medium/low/none/downgrade = info (WS-only)
+//   - new_comment / status_changed / start_date_changed / due_date_changed /
+//     assignee_changed → info
 //
 // Mute gate: the user's `system_notifications` preference is honored
 // exactly like the OS banner path — when muted, the DM is skipped but
