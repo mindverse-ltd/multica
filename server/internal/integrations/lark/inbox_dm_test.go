@@ -423,3 +423,103 @@ func TestShouldDMSeverity(t *testing.T) {
 // strPtr is a tiny helper so tests can build the *string the inbox
 // payload carries for issue_id without repeating the cast.
 func strPtr(s string) *string { return &s }
+
+// TestInboxDMNotifier_StatusChangedInReviewDMs verifies the DM fan-out
+// end of the status_changed severity change: an inbox:new event for a
+// status_changed item whose target status was promoted to `attention`
+// (in_review / done / cancelled / blocked upstream — see
+// severityForStatusChange) triggers exactly one Feishu DM per binding.
+func TestInboxDMNotifier_StatusChangedInReviewDMs(t *testing.T) {
+	const (
+		wsID    = "00000000-0000-4000-8000-0000000000a1"
+		userID  = "00000000-0000-4000-8000-0000000000b2"
+		instID  = "00000000-0000-4000-8000-0000000000c3"
+		issueID = "00000000-0000-4000-8000-0000000000d4"
+		openID  = "ou_user_status"
+	)
+	q := &fakeInboxDMQueries{
+		bindings: []UserBinding{
+			{
+				ID:             util.MustParseUUID("00000000-0000-4000-8000-0000000000e5"),
+				WorkspaceID:    util.MustParseUUID(wsID),
+				MulticaUserID:  util.MustParseUUID(userID),
+				InstallationID: util.MustParseUUID(instID),
+				ChannelUserID:  openID,
+			},
+		},
+		installByID: map[string]Installation{
+			instID: {ID: util.MustParseUUID(instID), Status: string(InstallationActive), AppID: "cli_status"},
+		},
+	}
+	c := &recordingDMClient{}
+	n := newInboxDMTestNotifier(t, q, c)
+	bus := events.New()
+	n.Register(bus)
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventInboxNew,
+		WorkspaceID: wsID,
+		Payload: map[string]any{"item": map[string]any{
+			"recipient_type": "member",
+			"recipient_id":   userID,
+			"severity":       "attention",
+			"type":           "status_changed",
+			"title":          "Issue ready for review",
+			"issue_id":       strPtr(issueID),
+		}},
+	})
+
+	if got := len(c.dmCalls); got != 1 {
+		t.Fatalf("in_review flip should DM once, got %d calls: %+v", got, c.dmCalls)
+	}
+	if !contains(c.dmCalls[0].Text, "Issue ready for review") {
+		t.Errorf("DM text should carry title: %q", c.dmCalls[0].Text)
+	}
+	if !contains(c.dmCalls[0].Text, "multica.test/issues/"+issueID) {
+		t.Errorf("DM text should carry issue URL: %q", c.dmCalls[0].Text)
+	}
+}
+
+// TestInboxDMNotifier_StatusChangedInfoNoDM verifies the negative side: a
+// status_changed into a routine state stays `info` and is NOT DMed.
+func TestInboxDMNotifier_StatusChangedInfoNoDM(t *testing.T) {
+	const (
+		wsID   = "00000000-0000-4000-8000-0000000000a1"
+		userID = "00000000-0000-4000-8000-0000000000b2"
+		instID = "00000000-0000-4000-8000-0000000000c3"
+	)
+	q := &fakeInboxDMQueries{
+		bindings: []UserBinding{
+			{
+				WorkspaceID:    util.MustParseUUID(wsID),
+				MulticaUserID:  util.MustParseUUID(userID),
+				InstallationID: util.MustParseUUID(instID),
+				ChannelUserID:  "ou_user_status_info",
+			},
+		},
+		installByID: map[string]Installation{
+			instID: {ID: util.MustParseUUID(instID), Status: string(InstallationActive)},
+		},
+	}
+	c := &recordingDMClient{}
+	n := newInboxDMTestNotifier(t, q, c)
+	bus := events.New()
+	n.Register(bus)
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventInboxNew,
+		WorkspaceID: wsID,
+		Payload: map[string]any{"item": map[string]any{
+			"recipient_type": "member",
+			"recipient_id":   userID,
+			"severity":       "info",
+			"type":           "status_changed",
+			"title":          "Issue moved to in_progress",
+			"issue_id":       strPtr("00000000-0000-4000-8000-0000000000d4"),
+		}},
+	})
+
+	if got := len(c.dmCalls); got != 0 {
+		t.Fatalf("info-severity status flip should not DM, got %d calls: %+v", got, c.dmCalls)
+	}
+}
