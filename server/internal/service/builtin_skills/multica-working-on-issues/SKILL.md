@@ -179,6 +179,28 @@ multica issue property unset <issue-id> --name Environment
 - Property vs metadata: if the value is workflow state a human should see and
   filter by, and a definition exists, prefer the property. Metadata stays the
   free-form bag for durable custom issue state.
+- `issue list` filters and sorts by property with the same name addressing:
+
+```bash
+multica issue list --property "Impact=High" --property "Impact=Medium" --output json
+multica issue list --property "QA Status=__none__" --status in_review --output json
+multica issue list --sort property:Impact --direction desc --output json
+```
+
+- `--property` takes one `Name=Value` per flag. Repeating the same property
+  matches ANY of its values; different properties must ALL match. Values are
+  option names or ids (select types), `true`/`false` (checkbox), a member
+  name/email/id (actor types), or the value itself for text, url, number,
+  and date (`YYYY-MM-DD`). The reserved value `__none__` matches
+  issues where the property is unset (works for every type; it is not
+  index-backed, so use it for targeted audits rather than as a default
+  listing filter). Only `=` is supported today; the `>=`, `<=` and `!=`
+  spellings are reserved for comparison filters and are rejected.
+- `--sort property:<name-or-id>` orders select properties by option order —
+  an ordinal scale (Low < Medium < High) sorts by meaning — and number/date/
+  text/url by value; issues without the property sort last either way.
+  Archived properties and types without an order (multi_select, checkbox,
+  actor kinds) are rejected up front.
 
 ## Status changes have server side effects
 
@@ -242,18 +264,16 @@ multica issue status <issue-id> in_progress --no-start
 ```
 
 Before self-assigning, check the target issue's comment history for an existing
-claim and any `## Active sibling runs` block (its `run-messages` commands show
-work in flight). The server also suppresses a trusted self-assignment when the
+claim. The server also suppresses a trusted self-assignment when the
 exact target `(issue, agent)` pair already has a non-terminal task, but it
 deliberately keeps same-agent handoffs to a fresh issue starting runs: cross-issue
 serial chains and triage batches rely on that.
 
 ## Who else is running right now
 
-The `## Active sibling runs` block covers only YOUR OWN other in-flight tasks.
-It says nothing about another agent working next to you, and it is a claim-time
-snapshot that does not refresh mid-turn. Ask the server when you need the
-current answer:
+Nothing about concurrent runs is pushed into your prompt: the answer changes
+while a turn is running, and most turns never need it. Ask the server on the
+turns that do — before opening a PR against code a sibling issue also touches:
 
 ```bash
 multica issue runs <issue-id> --active --output json     # in-flight runs on this issue
