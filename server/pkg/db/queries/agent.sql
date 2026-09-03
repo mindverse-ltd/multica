@@ -278,37 +278,6 @@ SELECT * FROM agent_task_queue
 WHERE agent_id = $1
 ORDER BY created_at DESC;
 
--- name: ListActiveSiblingIssueTasks :many
--- Claim-time context for agents that can work concurrently. Only tasks already
--- handed to a runtime can coordinate with the new claim; queued work is omitted
--- so the warning stays high-signal. Bounded so one heavily-used agent cannot
--- inflate every claim payload; issue-bound rows carry a concrete run-messages
--- lookup target.
-SELECT
-    atq.id AS task_id,
-    i.id AS issue_id,
-    w.issue_prefix,
-    i.number AS issue_number,
-    i.title AS issue_title,
-    atq.status,
-    atq.created_at,
-    atq.started_at
-FROM agent_task_queue atq
-JOIN issue i ON i.id = atq.issue_id
-JOIN workspace w ON w.id = i.workspace_id
-WHERE atq.agent_id = @agent_id
-  AND atq.id <> @task_id
-  AND i.workspace_id = @workspace_id
-  AND atq.status IN ('dispatched', 'running', 'waiting_local_directory')
-ORDER BY
-    CASE atq.status
-        WHEN 'running' THEN 0
-        WHEN 'waiting_local_directory' THEN 1
-        ELSE 2
-    END,
-    atq.created_at DESC
-LIMIT 5;
-
 -- name: CreateAgentTask :one
 -- Fenced against workspace teardown: lock_task_owner_rows (migration 284)
 -- locks the owners' workspace rows in the writer's own transaction and returns
@@ -330,7 +299,7 @@ LIMIT 5;
 -- The same pattern is used by every INSERT listed in pkg/dbid's write table.
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
+    coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id,
     id
@@ -341,7 +310,6 @@ SELECT
     sqlc.narg(trigger_summary),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
     COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
-    sqlc.narg(handoff_note),
     sqlc.narg(squad_id),
     CASE
         WHEN COALESCE(sqlc.narg('head_sha')::text, '') <> ''
@@ -372,7 +340,7 @@ RETURNING *;
 -- binding settles or the fire_at fallback is promoted by the normal sweeper.
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task, handoff_note,
+    coalesced_comment_ids, trigger_summary, force_fresh_session, is_leader_task,
     squad_id, context, originator_user_id, accountable_user_id, runtime_mcp_overlay, runtime_connected_apps,
     originator_source, delegated_from_task_id, rule_version_id, rerun_of_task_id,
     trigger_evidence_kind, trigger_evidence_ref_id, fire_at,
@@ -384,7 +352,6 @@ SELECT
     sqlc.narg(trigger_summary),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
     COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
-    sqlc.narg(handoff_note),
     sqlc.narg(squad_id),
     jsonb_strip_nulls(jsonb_build_object(
         'head_sha', NULLIF(COALESCE(sqlc.narg('head_sha')::text, ''), ''),
@@ -2432,9 +2399,8 @@ ORDER BY created_at DESC;
 --
 -- Issue identity is joined in because the caller renders runs from several
 -- issues in one list and cannot label a row from the task alone. agent_id is
--- here for the same reason: unlike ListActiveSiblingIssueTasks, whose rows all
--- belong to the claiming agent by construction, this read spans agents — which
--- one is on a sibling is the answer, not a detail.
+-- here for the same reason: this read spans agents, and which one is on a
+-- sibling is the answer, not a detail.
 --
 -- Columns are named rather than embedded. This is the coordination question,
 -- not the execution log: result and context are JSONB blobs, and work_dir /

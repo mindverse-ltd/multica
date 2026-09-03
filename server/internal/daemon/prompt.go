@@ -62,7 +62,6 @@ func backendResumeContinuityNotice(task Task) string {
 // Returns "" when none of the blocks apply.
 func perTurnContextBlocks(task Task, opts promptOpts) string {
 	var b strings.Builder
-	b.WriteString(buildActiveSiblingRunsBlock(task.IssueID, task.ActiveSiblingRuns))
 	b.WriteString(buildSharedLocalDirectoryBlock(opts.sharedLocalDirectory))
 	b.WriteString(buildWorktreeReplayConflictBlock(opts.worktreeReplayConflicts))
 	if task.PriorSessionResumeUnavailable {
@@ -174,40 +173,6 @@ func buildWorktreeReplayConflictBlock(files []string) string {
 	return b.String()
 }
 
-func buildActiveSiblingRunsBlock(currentIssueID string, runs []ActiveSiblingRunData) string {
-	// Sibling issue work is useful context only for another issue task. Chat,
-	// autopilot, and quick-create tasks have no current target issue whose claim
-	// history they could inspect, so rendering this block there creates an
-	// unactionable warning.
-	if currentIssueID == "" || len(runs) == 0 {
-		return ""
-	}
-	var b strings.Builder
-	b.WriteString("## Active sibling runs\n\n")
-	b.WriteString("This agent has other in-flight issue tasks. Before starting overlapping code or PR work, check this issue's comment history for a claim or handoff")
-	fmt.Fprintf(&b, " (`multica issue comment list %s --roots-only --summary --compact --output json`)", currentIssueID)
-	b.WriteString(" and inspect relevant siblings with the `run-messages` commands below — coordinate with existing work instead of opening a second PR. For writes that only record ownership or status of work already underway, use `--no-start` on `multica issue assign`/`update`/`status`.\n\n")
-	for _, run := range runs {
-		issueLabel := run.IssueIdentifier
-		if issueLabel == "" {
-			issueLabel = run.IssueID
-		}
-		fmt.Fprintf(&b, "- %s — task `%s`, status `%s`", issueLabel, run.TaskID, run.Status)
-		if run.StartedAt != "" {
-			fmt.Fprintf(&b, ", started %s", run.StartedAt)
-		} else if run.CreatedAt != "" {
-			fmt.Fprintf(&b, ", created %s", run.CreatedAt)
-		}
-		title := strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(run.IssueTitle))
-		if title != "" {
-			fmt.Fprintf(&b, ": %s", title)
-		}
-		fmt.Fprintf(&b, "; inspect: `multica issue run-messages %s`\n", run.TaskID)
-	}
-	b.WriteString("\n")
-	return b.String()
-}
-
 // BuildPrompt constructs the task prompt for an agent CLI.
 // Keep this minimal — detailed instructions live in CLAUDE.md / AGENTS.md
 // injected by execenv.InjectRuntimeConfig. The provider string is threaded
@@ -249,13 +214,6 @@ func buildPromptBody(task Task, provider string) string {
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
-	// Assignment handoff (MUL-3375): a free-text instruction the person who
-	// assigned/promoted this issue left for you. Frame it as a handoff, not a
-	// comment to reply to — there is no comment thread to answer here.
-	if task.HandoffNote != "" {
-		b.WriteString("You were handed this issue with a handoff note. Treat it as the assigner's scoping instruction for this run; follow it before doing anything broader, and do not reply to it as if it were a comment:\n\n")
-		fmt.Fprintf(&b, "> %s\n\n", task.HandoffNote)
-	}
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). Scan the threads first with `multica issue comment list %s --roots-only --summary --compact --output json`, then expand only what matters with `--thread <thread-id> --tail 30`. For `--since` incremental polling, pagination, and folding, see `multica issue comment list --help`.\n", task.IssueID)
 	return b.String()
