@@ -40,7 +40,7 @@ function CallbackContent() {
   const qc = useQueryClient();
   const loginWithGoogle = useAuthStore((s) => s.loginWithGoogle);
   const setUser = useAuthStore((s) => s.setUser);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<CallbackError | null>(null);
   const [desktopToken, setDesktopToken] = useState<string | null>(null);
 
   const postLogin = useCallback(
@@ -166,7 +166,7 @@ function CallbackContent() {
 
     if (cliCallback) {
       if (provider === "feishu") {
-        setError("CLI callback is not supported for Feishu login");
+        setError({ kind: "raw", text: "CLI callback is not supported for Feishu login" });
         return;
       }
       api
@@ -189,7 +189,7 @@ function CallbackContent() {
       exchangeToken(code, redirectUri)
         .then((result) => {
           if (isFeishuNeedsEmail(result)) {
-            setError("Email binding is not supported in desktop mode");
+            setError({ kind: "raw", text: "Email binding is not supported in desktop mode" });
             return;
           }
           setDesktopToken(result.token);
@@ -204,7 +204,7 @@ function CallbackContent() {
 
     if (provider === "feishu") {
       handleFeishuLogin(code, redirectUri).catch((err) => {
-        setError(err instanceof Error ? err.message : "Login failed");
+        setError(callbackErrorFrom(err));
       });
       return;
     }
@@ -212,7 +212,7 @@ function CallbackContent() {
     loginWithGoogle(code, redirectUri)
       .then((loggedInUser) => postLogin(loggedInUser))
       .catch((err) => {
-        setError(err instanceof Error ? err.message : "Login failed");
+        setError(callbackErrorFrom(err));
       });
   }, [searchParams, loginWithGoogle, handleFeishuLogin, postLogin]);
 
