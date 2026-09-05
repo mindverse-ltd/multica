@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/exaring/otelpgx"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/dbstartup"
 )
@@ -152,6 +153,7 @@ func applyPoolSizing(cfg *pgxpool.Config, dbURL string, sizing dbPoolSizing) {
 		cfg.MinConns = cfg.MaxConns
 	}
 	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+}
 
 func sameValidateConnect(got, want pgconn.ValidateConnectFunc) bool {
 	if got == nil || want == nil {

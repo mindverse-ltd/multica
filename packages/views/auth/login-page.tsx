@@ -141,6 +141,10 @@ export function LoginPage({
   // uses the matching token source (cookie → issueCliToken, localStorage → direct).
   const authSourceRef = useRef<"cookie" | "localStorage">("cookie");
   const autoStartRef = useRef(false);
+  // The last session ended because the server rejected its credential, not
+  // because the user asked to leave. Without saying so, landing here reads as
+  // the app having lost their work for no reason.
+  const sessionExpired = useAuthStore((state) => state.expired);
 
   // Check for existing session when CLI callback is present.
   // Prioritises cookie auth (= current browser session) to avoid authorising
