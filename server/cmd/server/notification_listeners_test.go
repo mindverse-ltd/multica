@@ -783,13 +783,87 @@ func TestNotification_PriorityChanged(t *testing.T) {
 	if sub1Items[0].Type != "priority_changed" {
 		t.Fatalf("expected type 'priority_changed', got %q", sub1Items[0].Type)
 	}
-	if sub1Items[0].Severity != "info" {
-		t.Fatalf("expected severity 'info', got %q", sub1Items[0].Severity)
+	if sub1Items[0].Severity != "attention" {
+		t.Fatalf("expected severity 'attention' for high priority, got %q", sub1Items[0].Severity)
 	}
 	// Title is now just the issue title; details contain from/to
 	expectedTitle := "priority test issue"
 	if sub1Items[0].Title != expectedTitle {
 		t.Fatalf("expected title %q, got %q", expectedTitle, sub1Items[0].Title)
+	}
+}
+
+// TestNotification_PriorityChangedSeverity verifies that the priority_changed
+// notification severity is driven by the NEW priority: urgent/high promote to
+// `attention` (Feishu DM fan-out), while medium/low/none and downgrades stay
+// `info` (WS-only).
+func TestNotification_PriorityChangedSeverity(t *testing.T) {
+	cases := []struct {
+		name         string
+		newPriority  string
+		prevPriority string
+		wantSeverity string
+	}{
+		{"urgent_promotes", "urgent", "medium", "attention"},
+		{"high_promotes", "high", "medium", "attention"},
+		{"medium_stays_info", "medium", "low", "info"},
+		{"low_stays_info", "low", "medium", "info"},
+		{"none_stays_info", "none", "high", "info"},
+		{"downgrade_urgent_to_low", "low", "urgent", "info"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			queries := db.New(testPool)
+			bus := newNotificationBus(t, queries)
+
+			subEmail := "notif-prio-sev-" + tc.name + "@multica.ai"
+			subID := createTestUser(t, subEmail)
+			t.Cleanup(func() { cleanupTestUser(t, subEmail) })
+
+			issueID := createTestIssue(t, testWorkspaceID, testUserID)
+			t.Cleanup(func() {
+				cleanupInboxForIssue(t, issueID)
+				cleanupTestIssue(t, issueID)
+			})
+
+			addTestSubscriber(t, issueID, "member", testUserID, "creator")
+			addTestSubscriber(t, issueID, "member", subID, "assignee")
+
+			bus.Publish(events.Event{
+				Type:        protocol.EventIssueUpdated,
+				WorkspaceID: testWorkspaceID,
+				ActorType:   "member",
+				ActorID:     testUserID,
+				Payload: map[string]any{
+					"issue": handler.IssueResponse{
+						ID:          issueID,
+						WorkspaceID: testWorkspaceID,
+						Title:       "priority severity test issue",
+						Status:      "todo",
+						Priority:    tc.newPriority,
+						CreatorType: "member",
+						CreatorID:   testUserID,
+					},
+					"assignee_changed": false,
+					"status_changed":   false,
+					"priority_changed": true,
+					"prev_priority":    tc.prevPriority,
+				},
+			})
+
+			items := inboxItemsForRecipient(t, queries, subID)
+			if len(items) != 1 {
+				t.Fatalf("expected 1 inbox item, got %d", len(items))
+			}
+			if items[0].Type != "priority_changed" {
+				t.Fatalf("expected type 'priority_changed', got %q", items[0].Type)
+			}
+			if items[0].Severity != tc.wantSeverity {
+				t.Fatalf("expected severity %q for new priority %q, got %q",
+					tc.wantSeverity, tc.newPriority, items[0].Severity)
+			}
+		})
 	}
 }
 

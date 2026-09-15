@@ -420,6 +420,106 @@ func TestShouldDMSeverity(t *testing.T) {
 	}
 }
 
+// TestInboxDMNotifier_PriorityChangedAttentionDM verifies the end-to-end
+// DM fan-out for a priority_changed inbox item that the listener promoted to
+// `attention` because the new priority is urgent: a bound recipient with an
+// active installation receives exactly one DM. Sibling to the
+// notification_listeners severity test (TestNotification_PriorityChangedSeverity)
+// which proves the promotion; this proves the resulting inbox row fans out.
+func TestInboxDMNotifier_PriorityChangedAttentionDM(t *testing.T) {
+	const (
+		wsID    = "00000000-0000-4000-8000-0000000000a1"
+		userID  = "00000000-0000-4000-8000-0000000000b2"
+		instID  = "00000000-0000-4000-8000-0000000000c3"
+		issueID = "00000000-0000-4000-8000-0000000000d4"
+		openID  = "ou_user_priority"
+	)
+	q := &fakeInboxDMQueries{
+		bindings: []UserBinding{
+			{
+				WorkspaceID:    util.MustParseUUID(wsID),
+				MulticaUserID:  util.MustParseUUID(userID),
+				InstallationID: util.MustParseUUID(instID),
+				ChannelUserID:  openID,
+			},
+		},
+		installByID: map[string]Installation{
+			instID: {ID: util.MustParseUUID(instID), Status: string(InstallationActive), AppID: "cli_prio"},
+		},
+	}
+	c := &recordingDMClient{}
+	n := newInboxDMTestNotifier(t, q, c)
+	bus := events.New()
+	n.Register(bus)
+
+	// Inbox item as the notification_listeners priority_changed branch produces it
+	// when the new priority is urgent: severity promoted to `attention`.
+	bus.Publish(events.Event{
+		Type:        protocol.EventInboxNew,
+		WorkspaceID: wsID,
+		Payload: map[string]any{"item": map[string]any{
+			"recipient_type": "member",
+			"recipient_id":   userID,
+			"severity":       "attention",
+			"type":           "priority_changed",
+			"title":          "priority test issue",
+			"issue_id":       strPtr(issueID),
+		}},
+	})
+
+	if got := len(c.dmCalls); got != 1 {
+		t.Fatalf("urgent/high priority_changed (attention) should DM once, got %d: %+v", got, c.dmCalls)
+	}
+	if !contains(c.dmCalls[0].Text, "priority test issue") {
+		t.Errorf("DM text should carry issue title: %q", c.dmCalls[0].Text)
+	}
+}
+
+// TestInboxDMNotifier_PriorityChangedInfoNoDM verifies that a priority_changed
+// inbox item whose new priority is medium/low (severity stays `info`) does NOT
+// trigger a Feishu DM — routine priority edits stay WS-only.
+func TestInboxDMNotifier_PriorityChangedInfoNoDM(t *testing.T) {
+	const (
+		wsID   = "00000000-0000-4000-8000-0000000000a1"
+		userID = "00000000-0000-4000-8000-0000000000b2"
+		instID = "00000000-0000-4000-8000-0000000000c3"
+	)
+	q := &fakeInboxDMQueries{
+		bindings: []UserBinding{
+			{
+				WorkspaceID:    util.MustParseUUID(wsID),
+				MulticaUserID:  util.MustParseUUID(userID),
+				InstallationID: util.MustParseUUID(instID),
+				ChannelUserID:  "ou_user_priority_info",
+			},
+		},
+		installByID: map[string]Installation{
+			instID: {ID: util.MustParseUUID(instID), Status: string(InstallationActive)},
+		},
+	}
+	c := &recordingDMClient{}
+	n := newInboxDMTestNotifier(t, q, c)
+	bus := events.New()
+	n.Register(bus)
+
+	bus.Publish(events.Event{
+		Type:        protocol.EventInboxNew,
+		WorkspaceID: wsID,
+		Payload: map[string]any{"item": map[string]any{
+			"recipient_type": "member",
+			"recipient_id":   userID,
+			"severity":       "info",
+			"type":           "priority_changed",
+			"title":          "priority test issue",
+			"issue_id":       strPtr("00000000-0000-4000-8000-0000000000d4"),
+		}},
+	})
+
+	if got := len(c.dmCalls); got != 0 {
+		t.Fatalf("info-severity priority_changed should not DM, got %d: %+v", got, c.dmCalls)
+	}
+}
+
 // strPtr is a tiny helper so tests can build the *string the inbox
 // payload carries for issue_id without repeating the cast.
 func strPtr(s string) *string { return &s }
