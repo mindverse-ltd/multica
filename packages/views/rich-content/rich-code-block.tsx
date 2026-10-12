@@ -39,28 +39,53 @@ import {
 } from "../editor/html-block-preview";
 import { highlightCode } from "../editor/syntax-highlight";
 import { LazyRichBlock } from "./lazy-rich-block";
+import { Ui4aFenceBlock } from "./ui4a-block";
 
 /**
  * Languages that may become a rich block. Anything else — including unknown
  * and absent languages — renders as static highlighted code.
+ *
+ * `ui4a/tsx` carries a slash, so the surface regex that reads the language
+ * token off `language-…` must keep the whole token (see rich-content.tsx).
  */
-export type RichFenceLanguage = "mermaid" | "html";
+export type RichFenceLanguage = "mermaid" | "html" | "ui4a/tsx";
 
 export function isRichFenceLanguage(
   language: string | undefined,
 ): language is RichFenceLanguage {
-  return language === "mermaid" || language === "html";
+  return language === "mermaid" || language === "html" || language === "ui4a/tsx";
+}
+
+/**
+ * Languages whose leaf can render an OPEN (still-streaming) fence. `ui4a/tsx`
+ * compiles each partial frame through partial-tsx's streaming completer, so the
+ * widget grows token by token as the fence types out (skeleton → card → chart).
+ *
+ * Mermaid and HTML are NOT streaming-capable: a half-written diagram throws on
+ * every keystroke and a half-written iframe would be recreated dozens of times a
+ * second, so they stay source-only until their fence closes (see
+ * streaming-fence.ts). This split is the whole reason the gate is per-language
+ * rather than a single closed-fence flag.
+ */
+export function isStreamingCapableFence(
+  language: string | undefined,
+): language is RichFenceLanguage {
+  return language === "ui4a/tsx";
 }
 
 /**
  * Whether a fenced block should render as a rich block rather than source.
- * Both conditions are required: a rich-capable language AND a closed fence.
+ *
+ * A streaming-capable language (`ui4a/tsx`) upgrades as soon as it is a rich
+ * language, open or closed — its leaf drives partial-frame compilation while the
+ * fence streams. Every other rich language additionally requires a closed fence.
  */
 export function shouldUpgradeFence(
   language: string | undefined,
   isFenceClosed: boolean,
 ): boolean {
-  return isRichFenceLanguage(language) && isFenceClosed;
+  if (!isRichFenceLanguage(language)) return false;
+  return isFenceClosed || isStreamingCapableFence(language);
 }
 
 // Memoized on source so appending text elsewhere in a streaming message does
@@ -74,6 +99,18 @@ const MemoHtmlBlockPreview = memo(HtmlBlockPreview);
  * Static lowlight-highlighted `<code>`, matching the editable Tiptap code
  * block's engine and `.hljs-*` CSS so a fence looks identical in every surface.
  */
+/**
+ * The grammar lowlight should highlight a fence with. A rich-fence language
+ * token is not itself a lowlight grammar — `ui4a/tsx` in particular is a
+ * slashed token that no grammar is registered under, so it would fall back to
+ * plaintext. Its body IS TSX, so while the fence streams open (and renders as
+ * source, not a compiled widget) it should read as highlighted TSX. Plain
+ * languages pass through unchanged.
+ */
+function highlightGrammar(language: string | undefined): string | undefined {
+  return language === "ui4a/tsx" ? "tsx" : language;
+}
+
 export function StaticCodeBody({
   language,
   body,
@@ -83,15 +120,16 @@ export function StaticCodeBody({
   body: string;
   className?: string;
 }) {
+  const grammar = highlightGrammar(language);
   const html = useMemo(() => {
     const code = body.replace(/\n$/, "");
     try {
-      const tree = highlightCode(code, language);
+      const tree = highlightCode(code, grammar);
       return toHtml(tree);
     } catch {
       return null;
     }
-  }, [body, language]);
+  }, [body, grammar]);
 
   if (html == null) {
     // Highlighter failure must not blank the code — render it unhighlighted.
@@ -102,7 +140,7 @@ export function StaticCodeBody({
 
   return (
     <code
-      className={cn("hljs", language && `language-${language}`, className)}
+      className={cn("hljs", grammar && `language-${grammar}`, className)}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
@@ -116,10 +154,18 @@ export function CodeBlockShell({
   language,
   code,
   children,
+  /**
+   * True while this shell shows the SOURCE of a rich fence that is still
+   * streaming open (a mermaid/html/ui4a fence whose closer has not arrived).
+   * Such a block can grow to hundreds of lines mid-stream, so it gets a capped,
+   * scrollable body; a settled ordinary code block keeps its natural height.
+   */
+  streamingSource = false,
 }: {
   language?: string;
   code: string;
   children: ReactNode;
+  streamingSource?: boolean;
 }) {
   const { t } = useT("editor");
   const [copied, setCopied] = useState(false);
@@ -134,7 +180,10 @@ export function CodeBlockShell({
   };
 
   return (
-    <div className="code-block-wrapper group/code relative my-3">
+    <div
+      className="code-block-wrapper group/code relative my-3"
+      data-streaming-source={streamingSource ? "" : undefined}
+    >
       <div className="absolute top-0 right-0 z-10 flex items-center gap-1.5 px-2 py-1.5 opacity-0 transition-opacity group-hover/code:opacity-100 focus-within:opacity-100">
         {language && (
           <span className="text-caption text-muted-foreground select-none">
@@ -175,13 +224,21 @@ export function CodeBlockShell({
 export function RichFenceBlock({
   language,
   body,
+  isFenceClosed,
 }: {
   language: RichFenceLanguage;
   body: string;
+  /**
+   * Whether the source fence has closed. Only `ui4a/tsx` is reached while this
+   * is false (it streams partial frames); mermaid/html are always closed here
+   * because shouldUpgradeFence gates them on closedness.
+   */
+  isFenceClosed: boolean;
 }) {
-  // Split into two components so the Mermaid-only height hook is never called
-  // conditionally.
+  // Split into separate components so the Mermaid-only height hook is never
+  // called conditionally.
   if (language === "mermaid") return <MermaidFenceBlock chart={body} />;
+  if (language === "ui4a/tsx") return <Ui4aFenceBlock code={body} closed={isFenceClosed} />;
   return <HtmlFenceBlock html={body} />;
 }
 

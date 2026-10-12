@@ -75,6 +75,7 @@ import {
   RichFenceBlock,
   StaticCodeBody,
   isRichFenceLanguage,
+  isStreamingCapableFence,
   shouldUpgradeFence,
 } from "./rich-code-block";
 import "katex/dist/katex.min.css";
@@ -341,7 +342,10 @@ function isMultiLineNode(node: ExtraProps["node"]): boolean {
  * diagram or preview iframe.
  */
 function RichCode({ className, children, node, ...props }: RichCodeProps) {
-  const language = /language-(\w+)/.exec(className || "")?.[1];
+  // `[\w/]` (not `\w`) keeps a slashed language token whole, e.g. `ui4a/tsx`.
+  // The run still stops at whitespace, so `language-htmlbars` reads as the whole
+  // `htmlbars`, never `html` — no substring dispatch is introduced.
+  const language = /language-([\w/]+)/.exec(className || "")?.[1];
   const isBlock = isMultiLineNode(node);
   const isFenceClosed = useIsFenceClosed(nodeStartOffset(node));
 
@@ -349,7 +353,13 @@ function RichCode({ className, children, node, ...props }: RichCodeProps) {
     // isRichFenceLanguage is re-checked for the type narrow; shouldUpgradeFence
     // already required it.
     if (isRichFenceLanguage(language)) {
-      return <RichFenceBlock language={language} body={String(children).replace(/\n$/, "")} />;
+      return (
+        <RichFenceBlock
+          language={language}
+          body={String(children).replace(/\n$/, "")}
+          isFenceClosed={isFenceClosed}
+        />
+      );
     }
   }
 
@@ -374,7 +384,9 @@ function readFencedCodeChild(children: ReactNode): {
   if (!isValidElement<{ className?: string } & ExtraProps>(child)) return {};
   return {
     // Whole class token only: `language-htmlbars` must not read as `html`.
-    language: /(?:^|\s)language-(\w+)(?:\s|$)/.exec(child.props.className ?? "")?.[1],
+    // `[\w/]` keeps a slashed token whole (`ui4a/tsx`) while the `(?:\s|$)`
+    // boundary still anchors on the full class, so `htmlbars` stays `htmlbars`.
+    language: /(?:^|\s)language-([\w/]+)(?:\s|$)/.exec(child.props.className ?? "")?.[1],
     offset: nodeStartOffset(child.props.node),
   };
 }
@@ -397,10 +409,20 @@ function RichPre({ children }: RichPreProps) {
     return <>{children}</>;
   }
 
+  // A rich-fence language whose fence has not closed yet is the streaming
+  // SOURCE of a block that will upgrade (its full body can be hundreds of
+  // lines), so the shell caps and scrolls it rather than letting it push the
+  // whole message down while it types out. A streaming-capable language
+  // (`ui4a/tsx`) is excluded: it already escaped this envelope above and renders
+  // its widget while open, so it never shows capped source.
+  const streamingSource =
+    isRichFenceLanguage(language) && !isFenceClosed && !isStreamingCapableFence(language);
+
   return (
     <CodeBlockShell
       language={language}
       code={getTextContent(children).replace(/\n$/, "")}
+      streamingSource={streamingSource}
     >
       {children}
     </CodeBlockShell>

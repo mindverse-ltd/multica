@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import { config } from "dotenv";
+import { createRequire } from "node:module";
 import { resolve } from "path";
 import {
   resolveDevDocsUrl,
@@ -8,6 +9,19 @@ import {
   resolveRemoteApiUrl,
 } from "./config/runtime-urls";
 import { createMDX } from "fumadocs-mdx/next";
+
+// Next loads its own webpack bundle when evaluating this config. Keep the
+// small runtime surface we use here structural so the app does not need a
+// direct webpack dependency (or a transitive webpack type package) just to
+// type-check next.config.ts.
+type WebpackRuntime = {
+  NormalModuleReplacementPlugin: new (
+    resourceRegExp: RegExp,
+    newResource: (resource: { context?: string; request: string }) => void,
+  ) => unknown;
+};
+
+const requireWebpack = createRequire(__filename);
 
 // Load root .env so local next.config.ts rewrites see REMOTE_API_URL / DOCS_URL.
 // Production requests use proxy.ts runtime rewrites, which read process.env
@@ -40,7 +54,56 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
 
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
-  transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
+  // partial-react/partial-tsx ship raw TypeScript (type:module) and are pulled
+  // in lazily by the ui4a/tsx GenUI renderer, so webpack must transpile them
+  // like the workspace packages rather than treat them as prebuilt deps.
+  transpilePackages: [
+    "@multica/core",
+    "@multica/ui",
+    "@multica/views",
+    "partial-react",
+    "partial-tsx",
+  ],
+  // partial-react keeps its Node-only package import-map helper in the same
+  // source module as the browser resolver. The helper is never called by the
+  // client renderer, but webpack still follows its dynamic `node:*` imports
+  // while building the client graph. Mark those optional branches unavailable
+  // in the browser so the lazy renderer does not make every route fail to
+  // compile with `UnhandledSchemeError`.
+  webpack(config, { isServer }) {
+    config.plugins.push(
+      new (requireWebpack("webpack") as WebpackRuntime).NormalModuleReplacementPlugin(
+        /^node:/,
+        (resource) => {
+          // Keep Node builtins available to the rest of the app. Only
+          // partial-react's optional Node branches need to disappear from the
+          // browser/server reference graphs for this client-only renderer.
+          if (/[/\\]partial-react[/\\](?:src[/\\])?/.test(resource.context ?? "")) {
+            resource.request = resolve(__dirname, "config/empty-node-runtime.ts");
+          }
+        },
+      ),
+    );
+    if (!isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        "node:fs/promises": false,
+        "node:module": false,
+        "node:path": false,
+        "fs/promises": false,
+        fs: false,
+        module: false,
+        path: false,
+      };
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        module: false,
+        path: false,
+      };
+    }
+    return config;
+  },
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
     : {}),
